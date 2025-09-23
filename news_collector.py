@@ -8,8 +8,8 @@ import httpx
 import os
 from typing import List, Dict, Any
 from datetime import datetime
-import feedparser
 from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
 
 class NewsArticle:
     """Represents a single news article"""
@@ -154,22 +154,39 @@ class NewsCollector:
         """Collect articles from RSS feeds"""
         articles = []
         
-        for feed in self.news_sources['rss_feeds']:
-            try:
-                print(f"📡 Parsing RSS feed: {feed['name']}")
-                feed_data = feedparser.parse(feed['url'])
-                
-                for entry in feed_data.entries[:10]:  # Limit to 10 articles per feed
-                    if entry.get('title') and entry.get('link'):
-                        articles.append(NewsArticle(
-                            title=entry['title'],
-                            url=entry['link'],
-                            source=feed['name'],
-                            content=entry.get('summary', ''),
-                            published_at=datetime(*entry.published_parsed[:6]) if entry.get('published_parsed') else datetime.now()
-                        ))
+        async with httpx.AsyncClient() as client:
+            for feed in self.news_sources['rss_feeds']:
+                try:
+                    print(f"📡 Parsing RSS feed: {feed['name']}")
+                    response = await client.get(feed['url'])
+                    
+                    if response.status_code == 200:
+                        # Parse RSS XML
+                        root = ET.fromstring(response.text)
                         
-            except Exception as e:
-                print(f"❌ Error parsing RSS feed {feed['name']}: {e}")
+                        # Find all items
+                        items = root.findall('.//item')[:10]  # Limit to 10 articles per feed
+                        
+                        for item in items:
+                            title_elem = item.find('title')
+                            link_elem = item.find('link')
+                            description_elem = item.find('description')
+                            
+                            if title_elem is not None and link_elem is not None:
+                                title = title_elem.text or ''
+                                url = link_elem.text or ''
+                                content = description_elem.text if description_elem is not None else ''
+                                
+                                if title and url:
+                                    articles.append(NewsArticle(
+                                        title=title,
+                                        url=url,
+                                        source=feed['name'],
+                                        content=content,
+                                        published_at=datetime.now()
+                                    ))
+                        
+                except Exception as e:
+                    print(f"❌ Error parsing RSS feed {feed['name']}: {e}")
         
         return articles
