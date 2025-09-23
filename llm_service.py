@@ -46,7 +46,10 @@ class LLMService:
             "3) For sports, prefer 'Team A beat Team B SCORE' when known. 4) Summary is 1-2 sentences, factual, with no opinion. "
             "5) Keep titles under 60 characters. 6) Use proper title case: capitalize first word and all important words, "
             "but lowercase articles (a, an, the), prepositions (in, on, at, to, for, of, with, by), and conjunctions (and, or, but). "
-            "7) Avoid truncation - write complete, clear titles."
+            "7) Avoid truncation - write complete, clear titles. "
+            "8) EXAMPLES: 'Hurricane Gabrielle Intensifies into Major Hurricane in Atlantic' (not 'IN The Atlantic'), "
+            "'Parents Fight to Raise Awareness of DRPLA Disease' (not 'TO Raise Awareness OF'). "
+            "9) Always lowercase: a, an, the, in, on, at, to, for, of, with, by, and, or, but, is, are, was, were."
         )
 
         user = {
@@ -71,6 +74,7 @@ class LLMService:
                     "If an item should not change, copy it. "
                     "IMPORTANT: Write complete, clear titles under 60 characters. No truncation or ellipses. "
                     "Use proper title case: capitalize important words, lowercase articles/prepositions/conjunctions. "
+                    "CRITICAL: Always lowercase these words: a, an, the, in, on, at, to, for, of, with, by, and, or, but, is, are, was, were. "
                     "JSON follows:\n" + json.dumps(user)
                 )}
             ]
@@ -89,10 +93,50 @@ class LLMService:
             parsed = json.loads(content) if content.startswith("{") else {}
             title = parsed.get("title") or current_title
             summary = parsed.get("summary") or current_summary
+            
+            # Post-process to fix capitalization issues
+            title = self._fix_capitalization(title)
+            
             self._cache[cache_key] = {"title": title, "summary": summary}
             return {"title": title, "summary": summary}
         except Exception:
             return result
+
+    def _fix_capitalization(self, title: str) -> str:
+        """Post-process title to fix capitalization issues."""
+        if not title:
+            return title
+        
+        # Words that should be lowercase (except at start of title)
+        small_words = {
+            'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+            'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
+            'into', 'onto', 'upon', 'over', 'under', 'above', 'below', 'between', 'among', 'through', 'during',
+            'before', 'after', 'since', 'until', 'within', 'without', 'against'
+        }
+        
+        # Common acronyms that should stay uppercase
+        acronyms = {'un', 'us', 'uk', 'eu', 'nato', 'fbi', 'cia', 'nba', 'nfl', 'mlb', 'nhl', 'npr', 'bbc', 'cnn', 'fox', 'abc', 'cbs', 'nbc'}
+        
+        words = title.split()
+        if not words:
+            return title
+        
+        # First word always capitalized
+        words[0] = words[0].title()
+        
+        # Process remaining words
+        for i in range(1, len(words)):
+            word_lower = words[i].lower()
+            if word_lower in small_words:
+                words[i] = words[i].lower()
+            elif word_lower in acronyms:
+                words[i] = words[i].upper()
+            else:
+                words[i] = words[i].title()
+        
+        return ' '.join(words)
 
     async def close(self) -> None:
         await self.client.aclose()

@@ -83,6 +83,34 @@ class TopicManager:
         key_text = ' '.join(key_terms).lower()
         return hashlib.md5(key_text.encode()).hexdigest()[:8]
     
+    def _looks_like_llm_refined(self, title: str) -> bool:
+        """Check if title looks like it's been refined by LLM (has proper capitalization)"""
+        if not title:
+            return False
+        
+        # Check if the title has proper capitalization patterns
+        # LLM-refined titles should have lowercase articles, prepositions, conjunctions
+        proper_capitalization_indicators = [
+            ' the ', ' a ', ' an ', ' in ', ' on ', ' at ', ' to ', ' for ', ' of ', ' with ', ' by ',
+            ' and ', ' or ', ' but ', ' is ', ' are ', ' was ', ' were ', ' over ', ' under '
+        ]
+        
+        # If the title contains these properly capitalized words, it's likely LLM-refined
+        has_proper_capitalization = any(indicator in title for indicator in proper_capitalization_indicators)
+        
+        # Also check if it doesn't have the problematic patterns
+        has_problematic_patterns = any([
+            ' TO ' in title.upper(),
+            ' OF ' in title.upper(), 
+            ' IN ' in title.upper(),
+            ' IS ' in title.upper(),
+            ' BY ' in title.upper(),
+            ' FOR ' in title.upper(),
+            ' AND ' in title.upper()
+        ])
+        
+        return has_proper_capitalization and not has_problematic_patterns
+    
     def find_existing_topic(self, title: str, content: str = "") -> Optional[str]:
         """Find if a similar topic already exists"""
         new_id = self.create_topic_id(title, content)
@@ -118,7 +146,13 @@ class TopicManager:
     def create_new_topic(self, title: str, content: str, sources: List[Dict], facts: List[Dict]) -> str:
         """Create a new topic"""
         topic_id = self.create_topic_id(title, content)
-        improved_title = self.improve_topic_title(title, content)
+        # Use the title as-is if it's already been refined by LLM
+        # If the title looks like it's already been processed by LLM (has proper capitalization),
+        # don't apply our own fixes
+        if self._looks_like_llm_refined(title):
+            improved_title = title
+        else:
+            improved_title = self.improve_topic_title(title, content)
         
         topic = {
             "id": topic_id,
@@ -168,7 +202,13 @@ class TopicManager:
         topic['last_updated'] = datetime.now().isoformat()
         topic['confidence_score'] = min(0.9, 0.5 + (len(topic['sources']) * 0.1))
         # Update canonical title/aliases/entities if improved
-        new_title = self.improve_topic_title(title, content)
+        # If the title looks like it's already been processed by LLM (has proper capitalization),
+        # don't apply our own fixes
+        if self._looks_like_llm_refined(title):
+            new_title = title
+        else:
+            new_title = self.improve_topic_title(title, content)
+            
         if new_title and new_title not in topic.get('aliases', []):
             topic.setdefault('aliases', []).append(new_title)
         # Prefer longest informative alias as canonical if significantly better

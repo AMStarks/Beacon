@@ -194,46 +194,54 @@ async def news_aggregation_task():
             print(f"Total articles: {len(all_articles)}")
             
             if all_articles:
-                # Detect topics using simple detector
-                detected_topics = simple_topic_detector.detect_topics(all_articles)
-                print(f"Detected {len(detected_topics)} topics")
+                # Use intelligent topic detector with LLM-powered grouping
+                from intelligent_topic_detector import IntelligentTopicDetector
+                from llm_service import LLMService
+                llm_service = LLMService()
+                intelligent_detector = IntelligentTopicDetector(llm_service)
+                detected_topics = await intelligent_detector.detect_topics(all_articles)
+                print(f"Detected {len(detected_topics)} intelligent topics")
                 
                 # Update topics using enhanced topic manager
                 for topic in detected_topics:
-                    # Create simple summary from articles
-                    summary = f"Topic with {topic.source_count} sources covering {topic.title}"
-                    facts = [{"fact": f"Topic: {topic.title}", "confidence": 0.8, "source": "System"}]
-                    sources = [{"name": article.source, "url": article.url, "reliability": "0.8"} for article in topic.articles]
+                    # Create facts from articles
+                    facts = []
+                    for article in topic.articles:
+                        facts.append({
+                            "fact": f"Article: {article.title}",
+                            "confidence": topic.confidence_score,
+                            "source": article.source
+                        })
                     
-                    # Try to refine title and summary with Grok LLM
-                    try:
-                        # Convert to TopicCluster format for LLM refinement
-                        from news_service import TopicCluster
-                        topic_cluster = TopicCluster(
-                            id=topic.id,
+                    # Create sources list
+                    sources = [{"name": article.source, "url": article.url, "reliability": str(topic.confidence_score)} for article in topic.articles]
+                    
+                    # Check if this is a hot update to existing topic
+                    existing_topic_id = None
+                    if topic.is_hot_update:
+                        # Try to find existing similar topic
+                        for existing_id, existing_topic in topic_manager.topics_db.items():
+                            if self._topics_are_related(topic.title, existing_topic["title"]):
+                                existing_topic_id = existing_id
+                                break
+                    
+                    if existing_topic_id:
+                        # Update existing topic with hot update
+                        print(f"🔥 HOT UPDATE: {topic.title}")
+                        topic_id = topic_manager.update_topic(
                             title=topic.title,
-                            summary=summary,
-                            articles=topic.articles,
-                            confidence_score=0.8,
-                            last_updated=datetime.now(),
-                            status="active"
+                            content=topic.summary,
+                            sources=sources,
+                            facts=facts
                         )
-                        
-                        # Refine with Grok LLM
-                        refined_topic = await news_service.refine_with_llm(topic_cluster)
-                        topic.title = refined_topic.title
-                        summary = refined_topic.summary
-                        print(f"LLM refined title: {topic.title}")
-                    except Exception as e:
-                        print(f"LLM refinement failed: {e}, using original title")
-                    
-                    # Use topic manager to create or update topic
-                    topic_id = topic_manager.create_or_update_topic(
-                        title=topic.title,
-                        content=summary,
-                        sources=sources,
-                        facts=facts
-                    )
+                    else:
+                        # Create new topic
+                        topic_id = topic_manager.create_or_update_topic(
+                            title=topic.title,
+                            content=topic.summary,
+                            sources=sources,
+                            facts=facts
+                        )
                     
                     # Update the legacy topics_db for compatibility
                     topic_report = {
@@ -244,16 +252,39 @@ async def news_aggregation_task():
                         "sources": sources,
                         "confidence_score": topic_manager.topics_db[topic_id]["confidence_score"],
                         "last_updated": topic_manager.topics_db[topic_id]["last_updated"],
-                        "topic_status": topic_manager.topics_db[topic_id]["topic_status"]
+                        "topic_status": topic_manager.topics_db[topic_id]["topic_status"],
+                        "is_hot_update": topic.is_hot_update,
+                        "source_count": topic.source_count,
+                        "source_names": topic.source_names
                     }
                     
                     topics_db[topic_id] = topic_report
-                    print(f"Added/Updated topic: {topic_manager.topics_db[topic_id]['title']}")
+                    print(f"Added/Updated topic: {topic_manager.topics_db[topic_id]['title']} ({topic.source_count} sources: {', '.join(topic.source_names)})")
             
             await asyncio.sleep(300)  # Run every 5 minutes
         except Exception as e:
             print(f"Error in news aggregation: {e}")
             await asyncio.sleep(60)
+
+def _topics_are_related(topic1_title: str, topic2_title: str) -> bool:
+    """Check if two topics are related (simple keyword overlap)."""
+    # Simple keyword-based similarity check
+    words1 = set(topic1_title.lower().split())
+    words2 = set(topic2_title.lower().split())
+    
+    # Remove common words
+    common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
+    words1 = words1 - common_words
+    words2 = words2 - common_words
+    
+    if not words1 or not words2:
+        return False
+    
+    # Check for significant overlap
+    overlap = len(words1.intersection(words2))
+    total_words = len(words1.union(words2))
+    
+    return overlap / total_words > 0.3
 
 # Startup event
 @app.on_event("startup")
