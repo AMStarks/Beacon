@@ -6,6 +6,7 @@ Implements the second layer of the Beacon architecture - LLM-powered topic detec
 import os
 import json
 import hashlib
+import asyncio
 from typing import List, Dict, Any
 from datetime import datetime
 import httpx
@@ -34,12 +35,11 @@ class TopicProcessor:
         
         print(f"🧠 Processing {len(articles)} articles into topics...")
         
-        if self.llm_enabled:
-            # Use LLM for intelligent topic grouping
-            topics = await self._llm_topic_grouping(articles)
-        else:
-            # Fallback to simple keyword-based grouping
-            topics = self._simple_topic_grouping(articles)
+        if not self.llm_enabled:
+            raise Exception("❌ LLM is not enabled. GROK_API_KEY and LLM_TITLES=1 must be set.")
+        
+        # Use LLM for intelligent topic grouping - NO FALLBACKS
+        topics = await self._llm_topic_grouping(articles)
         
         print(f"✅ Created {len(topics)} topics from {len(articles)} articles")
         return topics
@@ -65,7 +65,7 @@ class TopicProcessor:
 Rules:
 1. Group articles that are about the SAME story, even if they have different angles or sources
 2. Each group should represent one coherent news story
-3. Create a clear, concise title for each group (under 60 characters)
+3. Create a clear, concise title for each group (under 50 characters, be very brief)
 4. Write a 1-2 sentence summary for each group
 5. Identify if any group represents a "hot update" to an existing story
 6. Consider source reliability when grouping
@@ -95,8 +95,11 @@ Example:
 Return only the JSON array, no other text."""
 
         try:
-            # Call Grok API
-            async with httpx.AsyncClient() as client:
+            # Add longer delay to avoid rate limiting
+            await asyncio.sleep(5)  # 5 second delay between LLM calls
+            
+            # Call Grok API with timeout
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     "https://api.x.ai/v1/chat/completions",
                     headers={
@@ -122,59 +125,16 @@ Return only the JSON array, no other text."""
                     try:
                         groups = json.loads(llm_response)
                         return self._convert_groups_to_topics(groups, articles)
-                    except json.JSONDecodeError:
-                        print("❌ Failed to parse LLM response as JSON")
-                        return self._simple_topic_grouping(articles)
+                    except json.JSONDecodeError as e:
+                        raise Exception(f"❌ Failed to parse LLM response as JSON: {e}")
+                elif response.status_code == 429:
+                    raise Exception("⚠️ Rate limited by Grok API - no fallback available")
                 else:
-                    print(f"❌ LLM API error: {response.status_code}")
-                    return self._simple_topic_grouping(articles)
+                    raise Exception(f"❌ LLM API error: {response.status_code} - {response.text}")
                     
         except Exception as e:
-            print(f"❌ LLM processing failed: {e}")
-            return self._simple_topic_grouping(articles)
+            raise Exception(f"❌ LLM processing failed: {e}")
     
-    def _simple_topic_grouping(self, articles: List) -> List[Dict[str, Any]]:
-        """Fallback: Simple keyword-based topic grouping"""
-        print("📝 Using simple keyword-based grouping...")
-        
-        groups = []
-        used_articles = set()
-        
-        for i, article in enumerate(articles):
-            if i in used_articles:
-                continue
-                
-            # Find similar articles based on keywords
-            similar_indices = [i]
-            article_keywords = self._extract_keywords(article.title)
-            
-            for j, other_article in enumerate(articles[i+1:], i+1):
-                if j in used_articles:
-                    continue
-                    
-                other_keywords = self._extract_keywords(other_article.title)
-                similarity = self._calculate_similarity(article_keywords, other_keywords)
-                
-                if similarity > 0.3:  # 30% similarity threshold
-                    similar_indices.append(j)
-                    used_articles.add(j)
-            
-            used_articles.add(i)
-            
-            # Create group
-            group_articles = [articles[idx] for idx in similar_indices]
-            group_title = self._create_topic_title(group_articles)
-            group_summary = self._create_topic_summary(group_articles)
-            
-            groups.append({
-                "title": group_title,
-                "summary": group_summary,
-                "article_indices": similar_indices,
-                "is_hot_update": False,
-                "confidence": 0.7
-            })
-        
-        return self._convert_groups_to_topics(groups, articles)
     
     def _convert_groups_to_topics(self, groups: List[Dict], articles: List) -> List[Dict[str, Any]]:
         """Convert LLM groups into topic objects"""
@@ -213,70 +173,6 @@ Return only the JSON array, no other text."""
         
         return topics
     
-    def _extract_keywords(self, title: str) -> set:
-        """Extract meaningful keywords from a title"""
-        if not title:
-            return set()
-        
-        words = title.lower().split()
-        stop_words = {
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
-            'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'
-        }
-        
-        meaningful_words = {word for word in words if len(word) > 2 and word not in stop_words}
-        return meaningful_words
-    
-    def _calculate_similarity(self, keywords1: set, keywords2: set) -> float:
-        """Calculate similarity between two sets of keywords"""
-        if not keywords1 or not keywords2:
-            return 0.0
-        
-        intersection = len(keywords1.intersection(keywords2))
-        union = len(keywords1.union(keywords2))
-        
-        if union == 0:
-            return 0.0
-        
-        return intersection / union
-    
-    def _create_topic_title(self, articles: List) -> str:
-        """Create a topic title from articles"""
-        if not articles:
-            return "Unknown Topic"
-        
-        # Use the first article's title as base
-        base_title = articles[0].title
-        
-        # Clean up the title
-        title = base_title.strip()
-        
-        # Remove common suffixes
-        suffixes_to_remove = [
-            ' - cbs sports', ' - espn', ' - nfl', ' - nba', ' - mlb', ' - nhl',
-            ' - fox news', ' - cnn', ' - abc news', ' - nbc news', ' - reuters',
-            ' - associated press', ' - the guardian', ' - bbc news', ' - npr'
-        ]
-        
-        for suffix in suffixes_to_remove:
-            if title.lower().endswith(suffix.lower()):
-                title = title[:-len(suffix)].strip()
-                break
-        
-        # Ensure title is not too long
-        if len(title) > 80:
-            title = title[:77] + "..."
-        
-        return title
-    
-    def _create_topic_summary(self, articles: List) -> str:
-        """Create a topic summary from articles"""
-        if not articles:
-            return "No summary available"
-        
-        source_count = len(set(article.source for article in articles))
-        return f"Coverage from {source_count} sources on this developing story."
     
     def _get_source_weight(self, source: str) -> float:
         """Get weight for a source based on hierarchy"""
@@ -290,3 +186,64 @@ Return only the JSON array, no other text."""
                 return weight
         
         return self.source_tiers['default']
+    
+    async def generate_llm_summary(self, topic: Dict[str, Any]) -> str:
+        """Generate LLM summary for a topic"""
+        if not self.llm_enabled:
+            return "LLM summarization is not enabled."
+        
+        # Prepare article data for LLM
+        article_contents = []
+        for article in topic.get('articles', []):
+            article_contents.append(f"Source: {article.source}\nTitle: {article.title}\nContent: {getattr(article, 'content', '')[:500]}")
+        
+        combined_content = "\n\n---\n\n".join(article_contents)
+        
+        system_prompt = """You are an expert news summarizer. Create a concise, politically neutral summary of a news topic based on multiple articles.
+        
+        Rules:
+        1. The summary should be 3-5 sentences long
+        2. It must be strictly politically neutral and objective
+        3. Synthesize information from all provided articles
+        4. Focus on key facts and developments
+        5. Do not include introductory or concluding remarks"""
+        
+        user_prompt = f"""Please provide a politically neutral summary for this news topic:
+        
+        Topic: {topic.get('title', 'Unknown Topic')}
+        
+        Articles:
+        {combined_content}
+        
+        Provide only the summary text."""
+        
+        try:
+            # Add longer delay to avoid rate limiting
+            await asyncio.sleep(3)  # 3 second delay for summary calls
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.x.ai/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.llm_api_key}"
+                    },
+                    json={
+                        "model": "grok-4-latest",
+                        "stream": False,
+                        "temperature": 0.2,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ]
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return result['choices'][0]['message']['content'].strip()
+                else:
+                    return f"Error generating summary: HTTP {response.status_code}"
+                    
+        except Exception as e:
+            return f"Error generating summary: {e}"

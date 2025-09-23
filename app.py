@@ -68,6 +68,19 @@ async def get_topic(topic_id: str):
         return {"error": "Topic not found"}
     return {"topic": topic}
 
+@app.get("/api/topics/{topic_id}/summary")
+async def get_topic_summary(topic_id: str):
+    """Generate LLM summary for a specific topic"""
+    topic = topic_storage.get_topic(topic_id)
+    if not topic:
+        return {"error": "Topic not found"}
+    
+    try:
+        summary = await topic_processor.generate_llm_summary(topic)
+        return {"topic_id": topic_id, "summary": summary}
+    except Exception as e:
+        return {"error": f"Failed to generate summary: {e}"}
+
 async def news_aggregation_task():
     """Background task that continuously aggregates news and processes topics"""
     global background_task_running
@@ -98,8 +111,8 @@ async def news_aggregation_task():
                 topics_db = topic_storage.get_all_topics()
                 print(f"📊 Total topics in system: {len(topics_db)}")
             
-            # Wait before next cycle
-            await asyncio.sleep(300)  # 5 minutes between cycles
+            # Wait before next cycle - reduced to 1 minute to avoid rate limiting
+            await asyncio.sleep(60)  # 1 minute between cycles
             
         except Exception as e:
             print(f"❌ Error in news aggregation: {e}")

@@ -109,6 +109,11 @@
                     </div>
 
                     <div class="mb-6">
+                        <h4 class="text-lg font-semibold text-gray-900 mb-2">AI Analysis</h4>
+                        <div id="modalLlmSummary" class="bg-blue-50 p-4 rounded-lg border border-blue-200"></div>
+                    </div>
+
+                    <div class="mb-6">
                         <h4 class="text-lg font-semibold text-gray-900 mb-2">Key Facts</h4>
                         <div id="modalFacts" class="space-y-3"></div>
                     </div>
@@ -151,17 +156,20 @@
             topics.forEach(topic => {
                 const topicCard = document.createElement('div');
                 topicCard.className = 'topic-card bg-white rounded-lg shadow-sm border border-gray-200 p-6 cursor-pointer';
-                topicCard.onclick = () => showTopicDetail(topic);
+                topicCard.onclick = () => {
+                    console.log('Card clicked for topic:', topic.title);
+                    showTopicDetail(topic);
+                };
 
                 const confidencePercentage = Math.round(topic.confidence_score * 100);
-                const statusColor = topic.topic_status === 'active' ? 'text-green-600' : 
-                                  topic.topic_status === 'evolving' ? 'text-yellow-600' : 'text-gray-600';
+                const statusColor = topic.status === 'active' ? 'text-green-600' : 
+                                  topic.status === 'evolving' ? 'text-yellow-600' : 'text-gray-600';
 
                 topicCard.innerHTML = `
                     <div class="flex justify-between items-start mb-3">
                         <h4 class="text-lg font-semibold text-gray-900 line-clamp-2">${topic.canonical_title || topic.title}</h4>
                         <span class="px-2 py-1 text-xs rounded-full ${statusColor} bg-gray-100">
-                            ${topic.topic_status}
+                            ${topic.status}
                         </span>
                     </div>
                     
@@ -171,7 +179,7 @@
                     <div class="mb-3">
                         <div class="flex justify-between text-xs text-gray-500 mb-1">
                             <span>Confidence</span>
-                            <span>${confidencePercentage}% · Active ${(topic.active_score || 0).toFixed(2)}</span>
+                            <span>${confidencePercentage}% confidence</span>
                         </div>
                         <div class="confidence-bar rounded-full">
                             <div class="confidence-fill rounded-full" style="width: ${confidencePercentage}%"></div>
@@ -179,7 +187,7 @@
                     </div>
                     
                     <div class="flex justify-between items-center text-xs text-gray-500">
-                        <span><i class="fas fa-sources mr-1"></i>${topic.sources.length} sources</span>
+                        <span><i class="fas fa-sources mr-1"></i>${topic.source_names.length} sources</span>
                         <span><i class="fas fa-clock mr-1"></i>${formatDate(topic.last_updated)}</span>
                     </div>
                 `;
@@ -188,35 +196,57 @@
             });
         }
 
-        function showTopicDetail(topic) {
-            document.getElementById('modalTitle').textContent = topic.canonical_title || topic.title;
-            document.getElementById('modalSummary').textContent = topic.summary;
+        async function showTopicDetail(topic) {
+            console.log('showTopicDetail called with topic:', topic);
+            try {
+                document.getElementById('modalTitle').textContent = topic.canonical_title || topic.title;
+                document.getElementById('modalSummary').textContent = topic.summary;
+            
+            // Show loading for LLM summary
+            const llmSummaryContainer = document.getElementById('modalLlmSummary');
+            llmSummaryContainer.innerHTML = '<p class="text-gray-500">Generating LLM summary...</p>';
+
+            try {
+                const response = await fetch(`/api/topics/${topic.id}/summary`);
+                const data = await response.json();
+                if (data.summary) {
+                    llmSummaryContainer.innerHTML = `<p class="text-gray-700">${data.summary}</p>`;
+                } else {
+                    llmSummaryContainer.innerHTML = `<p class="text-red-500">Error: ${data.error}</p>`;
+                }
+            } catch (error) {
+                llmSummaryContainer.innerHTML = '<p class="text-red-500">Failed to generate LLM summary</p>';
+            }
             
             // Display facts
             const factsContainer = document.getElementById('modalFacts');
             factsContainer.innerHTML = '';
-            topic.facts.forEach(fact => {
-                const factElement = document.createElement('div');
-                factElement.className = 'flex justify-between items-center p-3 bg-gray-50 rounded-lg';
-                factElement.innerHTML = `
-                    <span class="text-gray-700">${fact.fact}</span>
-                    <div class="flex items-center space-x-2">
-                        <span class="text-xs text-gray-500">${Math.round(fact.confidence * 100)}%</span>
-                        <span class="text-xs text-blue-600">${fact.source}</span>
-                    </div>
-                `;
-                factsContainer.appendChild(factElement);
-            });
+            if (topic.facts && topic.facts.length > 0) {
+                topic.facts.forEach(fact => {
+                    const factElement = document.createElement('div');
+                    factElement.className = 'flex justify-between items-center p-3 bg-gray-50 rounded-lg';
+                    factElement.innerHTML = `
+                        <span class="text-gray-700">${fact.fact}</span>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs text-gray-500">${Math.round(fact.confidence * 100)}%</span>
+                            <span class="text-xs text-blue-600">${fact.source}</span>
+                        </div>
+                    `;
+                    factsContainer.appendChild(factElement);
+                });
+            } else {
+                factsContainer.innerHTML = '<p class="text-gray-500">No facts available</p>';
+            }
 
             // Display sources
             const sourcesContainer = document.getElementById('modalSources');
             sourcesContainer.innerHTML = '';
-            topic.sources.forEach(source => {
+            topic.source_names.forEach(source => {
                 const sourceElement = document.createElement('div');
                 sourceElement.className = 'flex justify-between items-center p-2 border border-gray-200 rounded';
                 sourceElement.innerHTML = `
-                    <a href="${source.url}" target="_blank" class="text-blue-600 hover:underline">${source.name}</a>
-                    <span class="text-xs text-gray-500">${Math.round(source.reliability * 100)}% reliable</span>
+                    <span class="text-blue-600">${source}</span>
+                    <span class="text-xs text-gray-500">Source</span>
                 `;
                 sourcesContainer.appendChild(sourceElement);
             });
@@ -225,6 +255,10 @@
             document.getElementById('modalLastUpdated').textContent = `Updated: ${formatDate(topic.last_updated)}`;
             
             document.getElementById('topicModal').classList.remove('hidden');
+            } catch (error) {
+                console.error('Error in showTopicDetail:', error);
+                alert('Error opening topic details: ' + error.message);
+            }
         }
 
         function setupEventListeners() {
