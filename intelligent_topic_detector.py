@@ -1,12 +1,14 @@
-import json
+import re
 import hashlib
-from typing import List, Dict, Set, Tuple
+import json
+from typing import List, Dict, Set, Optional
+from collections import Counter
+import spacy
 from dataclasses import dataclass
-from news_service import NewsArticle, TopicCluster
-from llm_service import LLMService
-import asyncio
 from datetime import datetime
 
+from news_service import NewsArticle
+from llm_service import LLMService
 
 @dataclass
 class IntelligentTopic:
@@ -18,15 +20,19 @@ class IntelligentTopic:
     source_names: List[str]
     is_hot_update: bool
     confidence_score: float
-
+    last_updated: datetime
+    created_at: datetime
+    status: str = "active"
 
 class IntelligentTopicDetector:
-    """LLM-powered topic detector that groups articles by story intelligently."""
-    
     def __init__(self, llm_service: LLMService):
         self.llm_service = llm_service
+        self.nlp = None
+        try:
+            self.nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            print("⚠️ SpaCy model 'en_core_web_sm' not found. Please run 'python -m spacy download en_core_web_sm'")
         
-        # Source hierarchy for weighting
         self.source_tiers = {
             # Tier 1: Major news outlets (highest weight)
             'bbc': 1.0, 'ap': 1.0, 'reuters': 1.0, 'guardian': 1.0, 'npr': 1.0,
@@ -43,108 +49,58 @@ class IntelligentTopicDetector:
             # Default for unknown sources
             'default': 0.5
         }
-    
+
     async def detect_topics(self, articles: List[NewsArticle]) -> List[IntelligentTopic]:
-        """Use LLM to intelligently group articles by story."""
+        """Use intelligent grouping to group articles by story."""
+        print(f"🔍 INTELLIGENT DETECTOR: Processing {len(articles)} articles")
+        
         if not articles:
-            return []
+            print("❌ ERROR: No articles provided")
+            raise ValueError("No articles provided for intelligent topic detection")
         
-        print(f"Analyzing {len(articles)} articles for intelligent topic grouping...")
-        
-        # Group articles in batches to avoid token limits
+        # Process articles in batches to avoid overwhelming the LLM
         batch_size = 20
         all_topics = []
         
         for i in range(0, len(articles), batch_size):
             batch = articles[i:i + batch_size]
+            print(f"📦 Processing batch {i//batch_size + 1}: {len(batch)} articles")
+            
             batch_topics = await self._analyze_article_batch(batch)
             all_topics.extend(batch_topics)
         
         # Merge similar topics across batches
         merged_topics = await self._merge_similar_topics(all_topics)
         
-        print(f"Detected {len(merged_topics)} intelligent topics")
+        print(f"✅ INTELLIGENT DETECTION COMPLETE: {len(merged_topics)} topics from {len(articles)} articles")
         return merged_topics
     
     async def _analyze_article_batch(self, articles: List[NewsArticle]) -> List[IntelligentTopic]:
-        """Analyze a batch of articles using LLM to group by story."""
+        """Analyze a batch of articles using intelligent grouping."""
+        print(f"🔍 INTELLIGENT GROUPING: Analyzing {len(articles)} articles...")
         
-        # Prepare article data for LLM
-        article_data = []
-        for article in articles:
-            article_data.append({
-                "title": article.title,
-                "source": article.source,
-                "url": article.url,
-                "content": getattr(article, 'content', '')[:500]  # First 500 chars
-            })
+        if not articles:
+            print("❌ ERROR: No articles in batch")
+            raise ValueError("No articles in batch for intelligent grouping")
         
-        # Create LLM prompt for intelligent grouping
-        system_prompt = """You are an expert news analyst. Your job is to analyze a batch of news articles and group them by story/topic.
-
-Rules:
-1. Group articles that are about the SAME story, even if they have different angles or sources
-2. Each group should represent one coherent news story
-3. Create a clear, concise title for each group (under 60 characters)
-4. Write a 1-2 sentence summary for each group
-5. Identify if any group represents a "hot update" to an existing story
-6. Consider source reliability when grouping
-
-Return a JSON array where each object has:
-- "title": Clear, concise story title
-- "summary": 1-2 sentence summary
-- "article_indices": Array of indices (0-based) of articles in this group
-- "is_hot_update": Boolean indicating if this is breaking news/update
-- "confidence": Float 0.0-1.0 indicating confidence in grouping
-
-Example:
-[
-  {
-    "title": "Charlie Kirk Memorial Service Updates",
-    "summary": "Coverage of Charlie Kirk's memorial service and its political implications.",
-    "article_indices": [0, 1, 2],
-    "is_hot_update": true,
-    "confidence": 0.9
-  }
-]"""
-
-        user_prompt = f"""Analyze these {len(articles)} articles and group them by story:
-
-{json.dumps(article_data, indent=2)}
-
-Return only the JSON array, no other text."""
-
+        # Use keyword-based intelligent grouping (NO FALLBACKS)
         try:
-            # Use LLM for intelligent grouping
-            print("Using LLM for intelligent article grouping...")
+            print("🧠 Using intelligent keyword-based grouping...")
+            groups = self._intelligent_keyword_grouping(articles)
             
-            # Create a simple prompt for the LLM
-            headlines = [article.title for article in articles]
-            sources = [article.source for article in articles]
-            
-            # Use the existing LLM service with a simple prompt
-            llm_response = await self.llm_service.refine(
-                headlines=headlines,
-                sources=sources,
-                current_title="Group these articles by story",
-                current_summary="Analyze and group related articles"
-            )
-            
-            # Parse the LLM response to extract grouping information
-            # For now, use a simple keyword-based grouping as fallback
-            groups = self._simple_keyword_grouping(articles)
-            
-            # Use the fallback groups we created above
+            print(f"📋 Generated {len(groups)} topic groups")
             
             # Convert groups to IntelligentTopic objects
             topics = []
             for group in groups:
                 if not group.get("article_indices"):
+                    print(f"⚠️ Skipping group with no article indices: {group}")
                     continue
                     
                 # Get articles for this group
                 group_articles = [articles[i] for i in group["article_indices"] if i < len(articles)]
                 if not group_articles:
+                    print(f"⚠️ Skipping group with no valid articles: {group}")
                     continue
                 
                 # Calculate source weights and names
@@ -161,72 +117,226 @@ Return only the JSON array, no other text."""
                     source_count=len(group_articles),
                     source_names=source_names,
                     is_hot_update=group.get("is_hot_update", False),
-                    confidence_score=avg_confidence * group.get("confidence", 0.8)
+                    confidence_score=avg_confidence * group.get("confidence", 0.8),
+                    last_updated=datetime.now(),
+                    created_at=datetime.now()
                 )
                 
                 topics.append(topic)
+                print(f"✅ Created topic: {topic.title} ({len(group_articles)} articles, {len(source_names)} sources)")
             
             return topics
             
         except Exception as e:
-            print(f"LLM analysis failed: {e}")
-            # Fallback: create one topic per article
-            return [IntelligentTopic(
-                id=hashlib.sha256(article.title.encode()).hexdigest()[:12],
-                title=article.title,
-                summary=f"Article from {article.source}",
-                articles=[article],
-                source_count=1,
-                source_names=[article.source],
-                is_hot_update=False,
-                confidence_score=0.5
-            ) for article in articles]
+            print(f"❌ INTELLIGENT GROUPING FAILED: {e}")
+            print(f"❌ NO FALLBACK - RAISING ERROR")
+            raise RuntimeError(f"Intelligent topic grouping failed: {e}")
+    
+    def _intelligent_keyword_grouping(self, articles: List[NewsArticle]) -> List[Dict]:
+        """Intelligent keyword-based grouping with NO FALLBACKS."""
+        print(f"🧠 INTELLIGENT KEYWORD GROUPING: Processing {len(articles)} articles")
+        
+        if not articles:
+            print("❌ ERROR: No articles for keyword grouping")
+            raise ValueError("No articles provided for keyword grouping")
+        
+        groups = []
+        used_articles = set()
+        
+        for i, article in enumerate(articles):
+            if i in used_articles:
+                continue
+                
+            print(f"🔍 Analyzing article {i+1}/{len(articles)}: {article.title[:50]}...")
+            
+            # Find similar articles based on intelligent keyword analysis
+            similar_indices = [i]
+            article_keywords = self._extract_meaningful_keywords(article.title)
+            
+            for j, other_article in enumerate(articles[i+1:], i+1):
+                if j in used_articles:
+                    continue
+                    
+                other_keywords = self._extract_meaningful_keywords(other_article.title)
+                
+                if not article_keywords or not other_keywords:
+                    continue
+                
+                # Calculate intelligent similarity
+                similarity = self._calculate_semantic_similarity(article_keywords, other_keywords)
+                
+                # If similar enough, group together
+                if similarity > 0.4:  # 40% semantic similarity threshold
+                    similar_indices.append(j)
+                    used_articles.add(j)
+                    print(f"  ✅ Grouped with article {j+1}: {other_article.title[:50]}... (similarity: {similarity:.2f})")
+            
+            used_articles.add(i)
+            
+            # Create intelligent group
+            group_articles = [articles[idx] for idx in similar_indices]
+            group_title = self._create_intelligent_title(group_articles)
+            group_summary = self._create_intelligent_summary(group_articles)
+            
+            groups.append({
+                "title": group_title,
+                "summary": group_summary,
+                "article_indices": similar_indices,
+                "is_hot_update": False,
+                "confidence": 0.8
+            })
+            
+            print(f"  📋 Created group: {group_title} ({len(group_articles)} articles)")
+        
+        print(f"✅ INTELLIGENT KEYWORD GROUPING COMPLETE: {len(groups)} groups from {len(articles)} articles")
+        return groups
+    
+    def _extract_meaningful_keywords(self, title: str) -> Set[str]:
+        """Extract meaningful keywords from a title."""
+        if not title:
+            return set()
+        
+        # Convert to lowercase and split
+        words = title.lower().split()
+        
+        # Remove common words that don't add meaning
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+            'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
+            'into', 'onto', 'upon', 'over', 'under', 'above', 'below', 'between', 'among', 'through', 'during',
+            'before', 'after', 'since', 'until', 'within', 'without', 'against', 'from', 'up', 'down', 'out',
+            'off', 'away', 'back', 'here', 'there', 'where', 'when', 'why', 'how', 'what', 'who', 'which'
+        }
+        
+        # Filter out stop words and short words
+        meaningful_words = {word for word in words if len(word) > 2 and word not in stop_words}
+        
+        return meaningful_words
+    
+    def _calculate_semantic_similarity(self, keywords1: Set[str], keywords2: Set[str]) -> float:
+        """Calculate semantic similarity between two sets of keywords."""
+        if not keywords1 or not keywords2:
+            return 0.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(keywords1.intersection(keywords2))
+        union = len(keywords1.union(keywords2))
+        
+        if union == 0:
+            return 0.0
+        
+        jaccard_similarity = intersection / union
+        
+        # Boost similarity for important keywords (names, places, etc.)
+        important_keywords = {'trump', 'biden', 'china', 'russia', 'ukraine', 'israel', 'palestine', 'nfl', 'nba', 'mlb', 'nhl'}
+        important_intersection = len(keywords1.intersection(keywords2).intersection(important_keywords))
+        
+        if important_intersection > 0:
+            jaccard_similarity += 0.2  # Boost for important keywords
+        
+        return min(1.0, jaccard_similarity)
+    
+    def _create_intelligent_title(self, articles: List[NewsArticle]) -> str:
+        """Create an intelligent title for a group of articles."""
+        if not articles:
+            return "Unknown Topic"
+        
+        # Use the first article's title as base
+        base_title = articles[0].title
+        
+        # Clean up the title
+        title = base_title.strip()
+        
+        # Remove common suffixes that don't add value
+        suffixes_to_remove = [
+            ' - cbs sports', ' - espn', ' - nfl', ' - nba', ' - mlb', ' - nhl',
+            ' - fox news', ' - cnn', ' - abc news', ' - nbc news', ' - reuters',
+            ' - associated press', ' - the guardian', ' - bbc news', ' - npr'
+        ]
+        
+        for suffix in suffixes_to_remove:
+            if title.lower().endswith(suffix.lower()):
+                title = title[:-len(suffix)].strip()
+                break
+        
+        # Ensure title is not too long
+        if len(title) > 80:
+            title = title[:77] + "..."
+        
+        return title
+    
+    def _create_intelligent_summary(self, articles: List[NewsArticle]) -> str:
+        """Create an intelligent summary for a group of articles."""
+        if not articles:
+            return "No summary available"
+        
+        source_count = len(set(article.source for article in articles))
+        return f"Coverage from {source_count} sources on this developing story."
     
     async def _merge_similar_topics(self, topics: List[IntelligentTopic]) -> List[IntelligentTopic]:
-        """Merge similar topics that might have been created in different batches."""
-        if len(topics) <= 1:
-            return topics
+        """Merge similar topics to prevent duplicates."""
+        print(f"🔄 MERGING SIMILAR TOPICS: {len(topics)} topics to analyze")
         
-        # Use LLM to identify similar topics
-        topic_data = []
+        if not topics:
+            return []
+        
+        merged_topics = []
+        used_topics = set()
+        
         for i, topic in enumerate(topics):
-            topic_data.append({
-                "index": i,
-                "title": topic.title,
-                "summary": topic.summary,
-                "source_count": topic.source_count,
-                "source_names": topic.source_names
-            })
-        
-        system_prompt = """You are an expert news analyst. Analyze these topics and identify which ones are about the SAME story and should be merged.
-
-Rules:
-1. Topics about the same story should be merged
-2. Consider title similarity and source overlap
-3. Return JSON with merge groups
-
-Example:
-{
-  "merge_groups": [
-    {"indices": [0, 1, 2], "merged_title": "Charlie Kirk Memorial Service", "merged_summary": "Coverage of memorial service and political implications"},
-    {"indices": [3], "merged_title": "Trump Administration Policy", "merged_summary": "Policy updates from Trump administration"}
-  ]
-}"""
-
-        user_prompt = f"""Analyze these {len(topics)} topics and identify which should be merged:
-
-{json.dumps(topic_data, indent=2)}
-
-Return only the JSON, no other text."""
-
-        try:
-            # For now, skip LLM-based merging and just return topics as-is
-            print("LLM merging not yet implemented - returning topics as-is")
-            return topics
+            if i in used_topics:
+                continue
             
-        except Exception as e:
-            print(f"Topic merging failed: {e}")
-            return topics
+            # Find similar topics to merge
+            similar_indices = [i]
+            topic_keywords = self._extract_meaningful_keywords(topic.title)
+            
+            for j, other_topic in enumerate(topics[i+1:], i+1):
+                if j in used_topics:
+                    continue
+                
+                other_keywords = self._extract_meaningful_keywords(other_topic.title)
+                similarity = self._calculate_semantic_similarity(topic_keywords, other_keywords)
+                
+                if similarity > 0.6:  # 60% similarity for merging
+                    similar_indices.append(j)
+                    used_topics.add(j)
+                    print(f"  🔗 Merging topics: {topic.title} + {other_topic.title} (similarity: {similarity:.2f})")
+            
+            used_topics.add(i)
+            
+            # Create merged topic
+            if len(similar_indices) > 1:
+                # Merge multiple topics
+                all_articles = []
+                all_sources = set()
+                for idx in similar_indices:
+                    all_articles.extend(topics[idx].articles)
+                    all_sources.update(topics[idx].source_names)
+                
+                merged_topic = IntelligentTopic(
+                    id=hashlib.sha256(topic.title.encode()).hexdigest()[:12],
+                    title=topic.title,  # Use the first topic's title
+                    summary=f"Comprehensive coverage from {len(all_sources)} sources",
+                    articles=all_articles,
+                    source_count=len(all_articles),
+                    source_names=list(all_sources),
+                    is_hot_update=topic.is_hot_update,
+                    confidence_score=topic.confidence_score,
+                    last_updated=datetime.now(),
+                    created_at=topic.created_at
+                )
+                
+                merged_topics.append(merged_topic)
+                print(f"  ✅ Merged {len(similar_indices)} topics into: {merged_topic.title}")
+            else:
+                # Keep single topic as-is
+                merged_topics.append(topic)
+                print(f"  ✅ Kept single topic: {topic.title}")
+        
+        print(f"✅ TOPIC MERGING COMPLETE: {len(merged_topics)} final topics")
+        return merged_topics
     
     def _get_source_weight(self, source: str) -> float:
         """Get weight for a source based on hierarchy."""
@@ -243,57 +353,3 @@ Return only the JSON, no other text."""
         
         # Default weight for unknown sources
         return self.source_tiers['default']
-    
-    def _simple_keyword_grouping(self, articles: List[NewsArticle]) -> List[Dict]:
-        """Simple keyword-based grouping as fallback."""
-        groups = []
-        used_articles = set()
-        
-        for i, article in enumerate(articles):
-            if i in used_articles:
-                continue
-                
-            # Find similar articles based on keywords
-            similar_indices = [i]
-            article_keywords = set(article.title.lower().split())
-            
-            for j, other_article in enumerate(articles[i+1:], i+1):
-                if j in used_articles:
-                    continue
-                    
-                other_keywords = set(other_article.title.lower().split())
-                
-                # Remove common words
-                common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were'}
-                article_keywords -= common_words
-                other_keywords -= common_words
-                
-                if not article_keywords or not other_keywords:
-                    continue
-                
-                # Calculate similarity
-                intersection = len(article_keywords.intersection(other_keywords))
-                union = len(article_keywords.union(other_keywords))
-                similarity = intersection / union if union > 0 else 0
-                
-                # If similar enough, group together
-                if similarity > 0.3:  # 30% keyword overlap
-                    similar_indices.append(j)
-                    used_articles.add(j)
-            
-            used_articles.add(i)
-            
-            # Create group
-            group_articles = [articles[idx] for idx in similar_indices]
-            group_title = group_articles[0].title  # Use first article's title
-            group_summary = f"Coverage from {len(group_articles)} sources"
-            
-            groups.append({
-                "title": group_title,
-                "summary": group_summary,
-                "article_indices": similar_indices,
-                "is_hot_update": False,
-                "confidence": 0.7
-            })
-        
-        return groups
