@@ -247,21 +247,28 @@ class SimpleTopicDetector:
         title = title.title()
         
         # Fix articles and prepositions (should be lowercase except at start)
-        # Include two-letter words that should be lowercase
+        # Include two-letter words and prepositions that should be lowercase
         small_words = {
             'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'as', 
             'is', 'be', 'am', 'do', 'go', 'up', 'us', 'we', 'me', 'my', 'it', 'if', 'so', 'no', 'he', 'hi',
             'will', 'are', 'was', 'were', 'has', 'have', 'had', 'does', 'did', 'can', 'could', 'should', 
-            'may', 'might', 'must', 'shall'
+            'may', 'might', 'must', 'shall', 'from', 'over', 'under', 'above', 'below', 'between', 'among',
+            'through', 'during', 'before', 'after', 'since', 'until', 'upon', 'within', 'without', 'against'
         }
+        
+        # Common acronyms that should stay uppercase
+        acronyms = {'un', 'us', 'uk', 'eu', 'nato', 'fbi', 'cia', 'nba', 'nfl', 'mlb', 'nhl', 'npr', 'bbc', 'cnn', 'fox', 'abc', 'cbs', 'nbc'}
         words = title.split()
         
         if words:
             words[0] = words[0].title()  # First word always capitalized
             
             for i in range(1, len(words)):
-                if words[i].lower() in small_words:
+                word_lower = words[i].lower()
+                if word_lower in small_words:
                     words[i] = words[i].lower()
+                elif word_lower in acronyms:
+                    words[i] = words[i].upper()
         
         return ' '.join(words)
 
