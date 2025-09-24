@@ -1,145 +1,115 @@
 """
-Topic Processing Layer - Local LLM Version
-Implements the second layer of the Beacon architecture using local GPT-2 for topic detection and grouping
+Topic Processing Layer - Heuristic Version
+Groups articles by TF-IDF similarity and produces aggregate stories
 """
 
 import asyncio
-import json
 import hashlib
 from typing import List, Dict, Any
 from datetime import datetime
-from sentence_transformers import SentenceTransformer
+
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+
 from enhanced_title_generator import enhanced_title_generator
+from news_collectors.base_collector import Article
+
 
 class TopicProcessor:
-    """Processes articles into topics using local LLM intelligence"""
-    
-    def __init__(self):
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.similarity_threshold = 0.78
-        self.source_tiers = {
-            'bbc': 1.0, 'ap': 1.0, 'reuters': 1.0, 'guardian': 1.0, 'npr': 1.0,
-            'associated press': 1.0, 'the guardian': 1.0,
-            'cnn': 0.8, 'fox': 0.8, 'abc': 0.8, 'cbs': 0.8, 'nbc': 0.8,
-            'espn': 0.8, 'bloomberg': 0.8, 'wall street journal': 0.8,
-            'techcrunch': 0.6, 'wired': 0.6, 'politico': 0.6,
-            'default': 0.5
-        }
-    
-    async def process_articles(self, articles: List) -> List[Dict[str, Any]]:
+    """Processes articles into stories using TF-IDF clustering and heuristic summaries."""
+
+    def __init__(self, similarity_threshold: float = 0.7):
+        self.vectorizer = TfidfVectorizer(max_features=4096, stop_words="english")
+        self.similarity_threshold = similarity_threshold
+
+    async def process_articles(self, articles: List[Article]) -> List[Dict[str, Any]]:
         if not articles:
             return []
 
-        print(f"🧠 Processing {len(articles)} articles with embedding clustering...")
+        print(f"🧠 Processing {len(articles)} articles using TF-IDF clustering...")
+        loop = asyncio.get_running_loop()
+        combined_text = [self._article_text(article) for article in articles]
 
-        embeddings = self.embedding_model.encode([getattr(a, 'title', '') + " " + getattr(a, 'content', '') for a in articles])
-        clusters = self._cluster_embeddings(embeddings)
+        def _encode():
+            return self.vectorizer.fit_transform(combined_text)
 
-        topics = []
+        matrix = await loop.run_in_executor(None, _encode)
+        sims = cosine_similarity(matrix)
+
+        clusters = self._density_cluster(sims)
+        topics: List[Dict[str, Any]] = []
         for cluster_indices in clusters:
-            cluster_articles = [articles[i] for i in cluster_indices]
-            topic = await self._create_topic_from_group(cluster_articles)
+            cluster_articles = [articles[idx] for idx in cluster_indices]
+            topic = self._create_story(cluster_articles)
             if topic:
                 topics.append(topic)
 
-        print(f"✅ Created {len(topics)} topics from {len(articles)} articles")
+        print(f"✅ Created {len(topics)} stories from {len(articles)} articles")
         return topics
 
-    def _cluster_embeddings(self, embeddings: List[np.ndarray]) -> List[List[int]]:
-        clusters = []
+    def _density_cluster(self, similarity_matrix: np.ndarray) -> List[List[int]]:
+        n = similarity_matrix.shape[0]
         visited = set()
-
-        for idx, emb in enumerate(embeddings):
+        clusters: List[List[int]] = []
+        for idx in range(n):
             if idx in visited:
                 continue
-
             cluster = [idx]
             visited.add(idx)
-            sims = cosine_similarity([emb], embeddings)[0]
-            related_indices = np.where(sims >= self.similarity_threshold)[0]
-            for r_idx in related_indices:
-                if r_idx not in visited:
-                    cluster.append(r_idx)
-                    visited.add(r_idx)
-
+            neighbours = np.where(similarity_matrix[idx] >= self.similarity_threshold)[0]
+            for neighbour in neighbours:
+                if neighbour not in visited:
+                    cluster.append(neighbour)
+                    visited.add(neighbour)
             clusters.append(cluster)
-
         return clusters
 
-    async def _create_topic_from_group(self, articles: List) -> Dict[str, Any]:
+    def _article_text(self, article: Article) -> str:
+        parts = [getattr(article, 'title', '') or '']
+        body = getattr(article, 'content', '') or ''
+        if body:
+            parts.append(body)
+        return ' '.join(parts)
+
+    def _create_story(self, articles: List[Article]) -> Dict[str, Any]:
         if not articles:
-            return None
+            return {}
 
-        try:
-            article_entries = []
-            article_summaries = []
+        titles = [getattr(article, 'title', 'News Update') for article in articles]
+        summaries = [enhanced_title_generator.summarize_article(getattr(article, 'title', ''), getattr(article, 'content', '')) for article in articles]
+        title = enhanced_title_generator.choose_title(titles, [getattr(article, 'content', '') for article in articles])
+        recap = enhanced_title_generator.build_topic_summary(title, summaries)
+        topic_id = self._generate_topic_id(titles, articles)
 
-            for article in articles:
-                title = getattr(article, 'title', 'No Title')
-                body = getattr(article, 'content', '')
-                metadata = await enhanced_title_generator.generate_topic_metadata(title, body)
-                article_entries.append({
-                    'title': title,
-                    'url': getattr(article, 'url', ''),
-                    'source': getattr(article, 'source', 'Unknown'),
-                    'summary': metadata['article_summary'],
-                    'published_at': getattr(article, 'published_at', datetime.now().isoformat())
-                })
-                article_summaries.append(metadata['article_summary'])
+        sources = []
+        for article, summary in zip(articles, summaries):
+            sources.append({
+                "title": getattr(article, 'title', 'News Update'),
+                "url": getattr(article, 'url', ''),
+                "source": getattr(article, 'source', 'Unknown'),
+                "summary": summary,
+                "published_at": getattr(article, 'published_at', datetime.utcnow()).isoformat(),
+            })
 
-            topic_title = enhanced_title_generator.clean_headline(metadata['topic_title'])
-            topic_summary = await enhanced_title_generator.generate_topic_summary(topic_title, article_summaries)
+        return {
+            "id": topic_id,
+            "title": title,
+            "canonical_title": title,
+            "summary": recap,
+            "sources": sources,
+            "source_names": sorted({src["source"] for src in sources}),
+            "article_count": len(sources),
+            "status": "active",
+            "confidence_score": min(0.9, 0.5 + 0.05 * len(sources)),
+            "created_at": sources[0]["published_at"],
+            "last_updated": datetime.utcnow().isoformat(),
+        }
 
-            source_names = list({entry['source'] for entry in article_entries})
-            confidence = self._average_confidence(source_names)
-
-            topic_id = self._generate_topic_id(topic_title, article_entries)
-
-            return {
-                'id': topic_id,
-                'title': topic_title,
-                'canonical_title': topic_title,
-                'summary': topic_summary,
-                'sources': article_entries,
-                'source_names': source_names,
-                'article_count': len(article_entries),
-                'status': 'active',
-                'confidence_score': confidence,
-                'created_at': article_entries[0]['published_at'],
-                'last_updated': datetime.now().isoformat()
-            }
-
-        except Exception as e:
-            print(f"❌ Error creating topic: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    def _average_confidence(self, source_names: List[str]) -> float:
-        weights = [self._get_source_weight(name) for name in source_names]
-        return sum(weights) / len(weights) if weights else 0.5
-
-    def _generate_topic_id(self, title: str, entries: List[Dict[str, Any]]) -> str:
-        key = title + ''.join(sorted(entry['url'] for entry in entries))
+    def _generate_topic_id(self, titles: List[str], articles: List[Article]) -> str:
+        key = '::'.join(sorted(titles)) + ''.join(sorted(getattr(article, 'url', '') for article in articles))
         return hashlib.sha256(key.encode()).hexdigest()[:12]
 
-    def _get_source_weight(self, source: str) -> float:
-        source_lower = (source or '').lower()
-        if source_lower in self.source_tiers:
-            return self.source_tiers[source_lower]
-
-        for known_source, weight in self.source_tiers.items():
-            if known_source in source_lower or source_lower in known_source:
-                return weight
-
-        return self.source_tiers['default']
-
     async def generate_llm_summary(self, topic: Dict[str, Any]) -> str:
-        try:
-            summaries = [source.get('summary', '') for source in topic.get('sources', [])]
-            return await enhanced_title_generator.generate_topic_summary(topic.get('title', ''), summaries)
-        except Exception as e:
-            print(f"❌ Error generating LLM summary: {e}")
-            return f"Summary generation failed: {e}"
+        summaries = [source.get('summary', '') for source in topic.get('sources', [])]
+        return enhanced_title_generator.build_topic_summary(topic.get('title', ''), summaries)

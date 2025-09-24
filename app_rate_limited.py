@@ -24,6 +24,7 @@ from monitoring.alerts import alert_manager
 from logging_config import setup_logging
 from storage.database import get_session
 from storage.models import Story, StoryArticle
+import concurrent.futures
 
 app = FastAPI(title="Beacon Rate Limited", description="AI-powered news aggregation with proper rate limiting")
 
@@ -37,17 +38,31 @@ topic_processor = TopicProcessor()
 topic_storage = TopicStorage()
 
 # Global state
-topics_db = {}
+topics_db: Dict[str, Any] = {}
 background_task_running = False
 task_lock = asyncio.Lock()
-latest_articles_debug = []
+topics_lock = asyncio.Lock()
+articles_lock = asyncio.Lock()
+latest_articles_debug: List[Dict[str, Any]] = []
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def _process_articles_sync(articles):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(topic_processor.process_articles(articles))
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize the system on startup"""
     setup_logging()
     print("🚀 Starting Rate-Limited Beacon News Aggregation System")
-    print("📋 Architecture: Rate-Limited News Collection → Local LLM Topic Processing → Topic Storage → API")
+    print("📋 Architecture: Rate-Limited News Collection → Topic Processing → Topic Storage → API")
     print("⏰ Rate Limiting: 1 API call per minute per service")
     
     # Start background news aggregation with rate limiting
@@ -70,8 +85,10 @@ async def debug_dashboard(request: Request):
 
 @app.get("/api/debug/articles")
 async def debug_articles():
+    async with articles_lock:
+        articles_copy = list(latest_articles_debug)
     return {
-        "articles": latest_articles_debug,
+        "articles": articles_copy,
         "metrics": ingestion_metrics.snapshot(),
         "alerts": alert_manager.get_recent_alerts(),
     }
@@ -134,7 +151,8 @@ async def get_story(story_id: int) -> Dict[str, Any]:
 async def get_topics():
     """Get all topics with error handling"""
     try:
-        topics = list(topics_db.values())
+        async with topics_lock:
+            topics = list(topics_db.values())
         return {"topics": topics}
     except Exception as e:
         print(f"❌ Error getting topics: {e}")
@@ -150,22 +168,14 @@ async def get_topic(topic_id: str):
 
 @app.get("/api/topics/{topic_id}/summary")
 async def get_topic_summary(topic_id: str):
-    """Generate LLM summary for a specific topic with timeout"""
+    """Generate summary for a specific topic"""
     topic = topics_db.get(topic_id)
     if not topic:
         return {"error": "Topic not found"}
-    
-    try:
-        # Add timeout protection
-        summary = await asyncio.wait_for(
-            topic_processor.generate_llm_summary(topic),
-            timeout=30.0  # 30 second timeout
-        )
-        return {"topic_id": topic_id, "summary": summary}
-    except asyncio.TimeoutError:
-        return {"error": "Summary generation timed out"}
-    except Exception as e:
-        return {"error": f"Failed to generate summary: {e}"}
+
+    summaries = [source.get('summary', '') for source in topic.get('sources', [])]
+    summary = enhanced_title_generator.build_topic_summary(topic.get('title', ''), summaries)
+    return {"topic_id": topic_id, "summary": summary}
 
 async def rate_limited_news_aggregation_task():
     """Rate-limited background task with 1 API call per minute"""
@@ -185,8 +195,7 @@ async def rate_limited_news_aggregation_task():
                     )
                     print(f"📰 Collected {len(articles)} articles")
 
-                    global latest_articles_debug
-                    latest_articles_debug = [
+                    article_debug_snapshot = [
                         {
                             "title": getattr(a, 'title', ''),
                             "source": getattr(a, 'source', ''),
@@ -196,41 +205,51 @@ async def rate_limited_news_aggregation_task():
                         }
                         for a in articles
                     ]
+                    async with articles_lock:
+                        latest_articles_debug.clear()
+                        latest_articles_debug.extend(article_debug_snapshot)
 
                     short_articles = [info for info in latest_articles_debug if info["content_length"] < 400]
                     if short_articles:
                         print(f"ℹ️ {len(short_articles)} articles have <400 chars of content")
                         for info in short_articles[:5]:
                             print(f"   - {info['source']}: {info['title']} ({info['content_length']} chars)")
+                    if len(articles) < 10:
+                        alert_manager.record_low_volume(len(articles), 10)
                 except asyncio.TimeoutError:
                     print("⏰ Article collection timed out, skipping this cycle")
                     await asyncio.sleep(60)
                     continue
                 except Exception as e:
                     print(f"❌ Error collecting articles: {e}")
+                    alert_manager.record_failure("collector", str(e))
                     await asyncio.sleep(60)
                     continue
                 
                 if articles:
                     # Step 2: Process articles with timeout and error handling
                     try:
+                        loop = asyncio.get_running_loop()
+
                         topics = await asyncio.wait_for(
-                            topic_processor.process_articles(articles),
-                            timeout=180.0  # 3 minute timeout for topic processing
+                            loop.run_in_executor(executor, _process_articles_sync, articles),
+                            timeout=240.0  # 4 minute timeout for topic processing
                         )
-                        print(f"🧠 Processed into {len(topics)} topics")
+                        print(f"🧠 Processed into {len(topics)} stories")
                         
                         # Step 3: Store topics
-                        for topic in topics:
-                            topics_db[topic['id']] = topic
+                        async with topics_lock:
+                            topics_db = {topic['id']: topic for topic in topics}
                         
-                        print(f"💾 Stored {len(topics)} topics")
-                        print(f"📊 Total topics in system: {len(topics_db)}")
+                        print(f"💾 Stored {len(topics)} stories")
+                        print(f"📊 Total stories in system: {len(topics_db)}")
                         
                     except asyncio.TimeoutError:
                         print("⏰ Topic processing timed out, skipping this cycle")
+                        alert_manager.record_failure("topic_processor", "timeout")
                     except Exception as e:
                         print(f"❌ Error processing topics: {e}")
+                        alert_manager.record_failure("topic_processor", str(e))
                         import traceback
                         traceback.print_exc()
                 
@@ -249,6 +268,7 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     print("🛑 Shutting down Beacon Rate Limited...")
     global background_task_running
+    executor.shutdown(wait=False)
     background_task_running = False
 
 if __name__ == "__main__":
