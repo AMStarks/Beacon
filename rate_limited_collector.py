@@ -7,13 +7,14 @@ import asyncio
 import httpx
 import re
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-from datetime import datetime, timedelta
+from urllib.parse import urljoin
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import logging
 import os
 import time
+import xml.etree.ElementTree as ET
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +48,8 @@ class RateLimitedNewsCollector:
         self.api_call_times = {
             'newsapi': 0,
             'newsdata': 0,
-            'web_scraping': 0
+            'web_scraping': 0,
+            'rss': 0
         }
         
         # API keys for news sources
@@ -55,11 +57,51 @@ class RateLimitedNewsCollector:
             'newsapi': os.getenv('NEWSAPI_KEY', 'd69a3b23cad345b898a6ee4d6303c69b'),
             'newsdata': os.getenv('NEWSDATA_KEY', 'pub_83ffea09fe7d4707aa82f3b6c5a0da7c')
         }
+
+        # Website configurations for lightweight scraping
+        self.web_sources = [
+            {
+                "name": "BBC News",
+                "base_url": "https://www.bbc.com/news",
+                "title_selector": "h1, .story-headline, .gs-c-promo-heading__title",
+                "content_selector": "article p, .ssrcss-uf6wea-RichTextComponentWrapper p"
+            },
+            {
+                "name": "Reuters",
+                "base_url": "https://www.reuters.com",
+                "title_selector": "h1, .article-header__heading__title",
+                "content_selector": "article p, .article-body__content p"
+            },
+            {
+                "name": "Associated Press",
+                "base_url": "https://apnews.com",
+                "title_selector": "h1, .Page-headline",
+                "content_selector": ".RichTextStoryBody p, article p"
+            },
+            {
+                "name": "NPR",
+                "base_url": "https://www.npr.org",
+                "title_selector": "h1, .storytitle",
+                "content_selector": ".storytext p, article p"
+            }
+        ]
+
+        # RSS feeds for additional breadth (parsed without feedparser dependency)
+        self.rss_feeds = [
+            {"name": "Reuters World", "url": "https://www.reuters.com/world/rss"},
+            {"name": "AP Top News", "url": "https://feeds.apnews.com/apf-topnews"},
+            {"name": "NPR Top Stories", "url": "https://feeds.npr.org/1001/rss.xml"},
+            {"name": "BBC World", "url": "http://feeds.bbci.co.uk/news/world/rss.xml"}
+        ]
     
     async def collect_articles(self) -> List[NewsArticle]:
         """Main method to collect articles with rate limiting"""
         print("🔍 Starting rate-limited news collection...")
         
+        # Prevent visited URL cache from growing unbounded and missing refreshes
+        if len(self.visited_urls) > 2000:
+            self.visited_urls = set(list(self.visited_urls)[-1000:])
+
         all_articles = []
         
         # Collect from APIs with rate limiting
@@ -71,6 +113,11 @@ class RateLimitedNewsCollector:
         web_articles = await self._collect_from_websites()
         all_articles.extend(web_articles)
         print(f"🌐 Collected {len(web_articles)} articles from web scraping")
+
+        # Collect from RSS feeds with gentle rate limiting
+        rss_articles = await self._collect_from_rss()
+        all_articles.extend(rss_articles)
+        print(f"🛰️ Collected {len(rss_articles)} articles from RSS feeds")
         
         # Remove duplicates
         unique_articles = self._remove_duplicates(all_articles)
@@ -169,17 +216,7 @@ class RateLimitedNewsCollector:
         """Simple web scraping for news articles (no rate limits)"""
         articles = []
         
-        # Simple news sources
-        news_sources = [
-            {
-                "name": "BBC News",
-                "base_url": "https://www.bbc.com/news",
-                "title_selector": "h1, .story-headline",
-                "content_selector": "p"
-            }
-        ]
-        
-        for source in news_sources:
+        for source in self.web_sources:
             try:
                 print(f"🌐 Scraping {source['name']}...")
                 source_articles = await self._scrape_source(source)
@@ -205,7 +242,7 @@ class RateLimitedNewsCollector:
             links = soup.find_all('a', href=True)
             article_urls = []
             
-            for link in links[:5]:  # Limit to 5 articles
+            for link in links[:20]:  # modest limit per source
                 href = link.get('href')
                 if href and ('/news/' in href or '/article/' in href or '/story/' in href):
                     full_url = urljoin(source['base_url'], href)
@@ -245,7 +282,7 @@ class RateLimitedNewsCollector:
             
             # Extract content
             content_elems = soup.select(source['content_selector'])
-            content = " ".join([elem.get_text().strip() for elem in content_elems[:3]])  # First 3 paragraphs
+            content = " ".join([elem.get_text().strip() for elem in content_elems[:4]])  # First 4 paragraphs
             
             return NewsArticle(
                 title=title,
@@ -281,3 +318,56 @@ class RateLimitedNewsCollector:
                 seen_titles.add(article.title)
         
         return unique_articles
+
+    async def _collect_from_rss(self) -> List[NewsArticle]:
+        """Collect articles from RSS feeds with lightweight XML parsing"""
+        articles = []
+
+        # Respect rate limiting on RSS calls as well
+        if not self._can_make_api_call('rss'):
+            print("⏰ RSS feeds recently fetched, skipping")
+            return articles
+
+        for feed in self.rss_feeds:
+            try:
+                response = await self.client.get(feed['url'])
+                if response.status_code != 200:
+                    continue
+
+                root = None
+                try:
+                    root = ET.fromstring(response.text)
+                except ET.ParseError:
+                    continue
+
+                items = root.findall('.//item')[:10]
+                for item in items:
+                    title_elem = item.find('title')
+                    link_elem = item.find('link')
+                    description_elem = item.find('description')
+
+                    if title_elem is None or link_elem is None:
+                        continue
+
+                    title = (title_elem.text or '').strip()
+                    link = (link_elem.text or '').strip()
+                    if not title or not link:
+                        continue
+
+                    description = ''
+                    if description_elem is not None and description_elem.text:
+                        description = re.sub('<[^<]+?>', '', description_elem.text).strip()
+
+                    articles.append(NewsArticle(
+                        title=title,
+                        url=link,
+                        source=feed['name'],
+                        content=description[:500],
+                        published_at=datetime.now(),
+                        category="general"
+                    ))
+            except Exception as rss_error:
+                print(f"❌ Error parsing RSS feed {feed['name']}: {rss_error}")
+
+        self.api_call_times['rss'] = time.time()
+        return articles

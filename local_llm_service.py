@@ -1,13 +1,18 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import asyncio
 import logging
+
+
+PHI3_MODEL_ID = "microsoft/Phi-3-mini-4k-instruct"
+
 
 class LocalLLMService:
     def __init__(self):
         self.model = None
         self.tokenizer = None
-        self.model_name = 'gpt2'
+        self.model_name = PHI3_MODEL_ID
+        self.generator = None
         self.is_loaded = False
         
     async def load_model(self):
@@ -31,12 +36,40 @@ class LocalLLMService:
     
     async def _load_model_internal(self):
         """Internal model loading with proper async handling"""
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
-        
-        # Set pad token
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name,
+            trust_remote_code=True
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+            attn_implementation="eager"
+        )
+        self.model.eval()
+        self.model.to("cpu")
+
+        # Ensure pad token exists for generation
         if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+            if self.tokenizer.eos_token is None:
+                self.tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
+                self.model.resize_token_embeddings(len(self.tokenizer))
+            else:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        if hasattr(self.model.config, "use_cache"):
+            self.model.config.use_cache = False
+        if hasattr(self.model.config, "return_dict_in_generate"):
+            self.model.config.return_dict_in_generate = False
+        if hasattr(self.model.config, "cache_implementation"):
+            self.model.config.cache_implementation = "static"
+
+        self.generator = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            device="cpu"
+        )
     
     async def generate_summary(self, articles_text: str) -> str:
         """Generate a summary using the local LLM"""
@@ -45,29 +78,26 @@ class LocalLLMService:
             
         try:
             # Create a prompt for summarization
-            prompt = f"Summarize these news articles in a neutral tone:\n\n{articles_text[:1000]}\n\nSummary:"
-            
-            inputs = self.tokenizer.encode(prompt, return_tensors='pt')
-            
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    inputs,
-                    max_length=inputs.shape[1] + 100,
-                    num_return_sequences=1,
-                    temperature=0.7,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-            
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Extract just the summary part
-            if 'Summary:' in response:
-                summary = response.split('Summary:')[-1].strip()
-            else:
-                summary = response[len(prompt):].strip()
-                
-            return summary[:500]  # Limit to 500 characters
+            prompt = (
+                "You are a neutral news editor. Summarize the following news content "
+                "in 2 concise sentences.\n\nContent:\n"
+                f"{articles_text[:1200]}\n\nSummary:"
+            )
+
+            outputs = self.generator(
+                prompt,
+                max_new_tokens=120,
+                temperature=0.6,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+
+            generated = outputs[0]["generated_text"]
+
+            summary = generated.split("Summary:")[-1].strip()
+
+            return summary[:500] if summary else "News coverage of current events."
             
         except Exception as e:
             print(f'❌ Error generating summary: {e}')
@@ -79,34 +109,29 @@ class LocalLLMService:
             await self.load_model()
             
         try:
-            prompt = f"Create a brief, concise title (under 50 characters) for these news articles:\n\n{articles_text[:500]}\n\nTitle:"
-            
-            inputs = self.tokenizer.encode(prompt, return_tensors='pt')
-            
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    inputs,
-                    max_length=inputs.shape[1] + 20,
-                    num_return_sequences=1,
-                    temperature=0.8,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-            
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Extract just the title part
-            if 'Title:' in response:
-                title = response.split('Title:')[-1].strip()
-            else:
-                title = response[len(prompt):].strip()
-                
-            # Clean up and limit length
+            prompt = (
+                "You are a professional news editor. Write a 6-12 word headline "
+                "describing the main news story based on the provided content.\n\n"
+                f"Content:\n{articles_text[:800]}\n\nHeadline:"
+            )
+
+            outputs = self.generator(
+                prompt,
+                max_new_tokens=40,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+
+            generated = outputs[0]["generated_text"]
+            title = generated.split("Headline:")[-1].strip()
+
             title = title.replace('\n', ' ').strip()
-            if len(title) > 50:
-                title = title[:47] + '...'
-                
-            return title
+            if len(title) > 80:
+                title = title[:77] + '...'
+
+            return title or "News Update"
             
         except Exception as e:
             print(f'❌ Error generating title: {e}')
