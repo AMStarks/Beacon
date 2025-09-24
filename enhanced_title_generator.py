@@ -5,7 +5,7 @@ Uses improved prompts, post-processing, and context optimization for concise tit
 
 import re
 import asyncio
-import torch
+import json
 from typing import List
 from local_llm_service import local_llm
 
@@ -275,6 +275,74 @@ Summary:"""
             return "News Update"
         cleaned = self._apply_title_case(headline)
         return cleaned[:80]
+
+    async def generate_topic_metadata(self, title: str, body: str) -> dict:
+        """Use the LLM to infer topic metadata (title/key/summary) for a single article."""
+        if not local_llm.is_loaded:
+            await asyncio.wait_for(local_llm.load_model(), timeout=10.0)
+
+        prompt = (
+            "You are a senior news editor. Read the article and respond with JSON only.\n"
+            "Required JSON schema: {\n"
+            "  \"topic_title\": string (6-12 words, title case),\n"
+            "  \"topic_key\": string (3-6 lowercase words separated by hyphens),\n"
+            "  \"article_summary\": string (one sentence summarizing the article).\n"
+            "}\n"
+            f"Article Title: {title}\n"
+            f"Article Body: {body[:2400]}\n"
+            "JSON:"
+        )
+
+        raw = await local_llm.generate_text(prompt, max_new_tokens=220, temperature=0.2)
+        json_text = self._extract_json(raw)
+
+        try:
+            data = json.loads(json_text)
+        except Exception:
+            data = {
+                "topic_title": self.clean_headline(title),
+                "topic_key": self._slugify(title),
+                "article_summary": body[:200] or title
+            }
+
+        data.setdefault("topic_title", self.clean_headline(title))
+        data.setdefault("topic_key", self._slugify(data["topic_title"]))
+        data.setdefault("article_summary", body[:200] or title)
+        data["topic_title"] = self.clean_headline(data["topic_title"])
+        data["topic_key"] = self._slugify(data["topic_key"])
+        data["article_summary"] = re.sub(r'\s+', ' ', data["article_summary"]).strip()
+        return data
+
+    async def generate_topic_summary(self, topic_title: str, article_summaries: List[str]) -> str:
+        if not local_llm.is_loaded:
+            await asyncio.wait_for(local_llm.load_model(), timeout=10.0)
+
+        bullet_list = '\n'.join(f"- {summary}" for summary in article_summaries if summary)
+        prompt = (
+            "You are a neutral journalist. Read the bullet summaries below and write a concise"
+            " 2 sentence recap of the overarching story. Avoid clickbait.\n"
+            f"Topic: {topic_title}\n"
+            f"Summaries:\n{bullet_list}\n"
+            "Recap:"
+        )
+
+        response = await local_llm.generate_text(prompt, max_new_tokens=120, temperature=0.25)
+        recap = re.sub(r'\s+', ' ', response.strip())
+        if len(recap) < 20:
+            recap = ' '.join(article_summaries)[:200] or topic_title
+        return recap
+
+    def _extract_json(self, text: str) -> str:
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            return text[start:end+1]
+        return text
+
+    def _slugify(self, text: str) -> str:
+        text = re.sub(r'[^a-zA-Z0-9\s-]', '', text or '').strip().lower()
+        text = re.sub(r'\s+', '-', text)
+        return text or "topic"
 
 # Global instance
 enhanced_title_generator = EnhancedTitleGenerator()
