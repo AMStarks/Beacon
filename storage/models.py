@@ -53,7 +53,7 @@ class Story(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    articles = relationship("StoryArticle", back_populates="story")
+    articles = relationship("StoryArticle", back_populates="story", cascade="all, delete-orphan")
 
 
 class StoryArticle(Base):

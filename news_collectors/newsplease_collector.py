@@ -21,19 +21,19 @@ class NewsPleaseCollector(BaseCollector):
         articles: List[Article] = []
         for url in self.urls:
             try:
-                article = NewsPlease.from_url(url)
-                if not article or not article.title:
+                result = NewsPlease.from_url(url)
+                if not result or not result.title:
                     continue
-                published = article.date_publish or datetime.utcnow()
+                published = result.date_publish or datetime.utcnow()
                 articles.append(
                     Article(
-                        title=article.title,
+                        title=result.title,
                         url=url,
-                        source=article.source_domain or url,
-                        content=article.maintext or "",
-                        summary=article.summary or "",
+                        source=result.source_domain or url,
+                        content=result.maintext or "",
+                        summary=result.summary or "",
                         published_at=published,
-                        language=article.language or "en",
+                        language=result.language or "en"
                     )
                 )
             except Exception as exc:

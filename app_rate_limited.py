@@ -7,17 +7,23 @@ import asyncio
 import os
 from datetime import datetime
 from typing import List, Dict, Any
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Request
+from sqlalchemy.orm import joinedload
 
 # Import our rate-limited components
 from rate_limited_collector import RateLimitedNewsCollector
 from topic_processor_local_fixed import TopicProcessor
 from topic_storage import TopicStorage
 from enhanced_title_generator import enhanced_title_generator
+from monitoring import ingestion_metrics
+from monitoring.alerts import alert_manager
+from logging_config import setup_logging
+from storage.database import get_session
+from storage.models import Story, StoryArticle
 
 app = FastAPI(title="Beacon Rate Limited", description="AI-powered news aggregation with proper rate limiting")
 
@@ -39,6 +45,7 @@ latest_articles_debug = []
 @app.on_event("startup")
 async def startup_event():
     """Initialize the system on startup"""
+    setup_logging()
     print("🚀 Starting Rate-Limited Beacon News Aggregation System")
     print("📋 Architecture: Rate-Limited News Collection → Local LLM Topic Processing → Topic Storage → API")
     print("⏰ Rate Limiting: 1 API call per minute per service")
@@ -63,7 +70,65 @@ async def debug_dashboard(request: Request):
 
 @app.get("/api/debug/articles")
 async def debug_articles():
-    return {"articles": latest_articles_debug}
+    return {
+        "articles": latest_articles_debug,
+        "metrics": ingestion_metrics.snapshot(),
+        "alerts": alert_manager.get_recent_alerts(),
+    }
+
+
+def _story_to_dict(story: Story) -> Dict[str, Any]:
+    articles_data = []
+    for link in story.articles:
+        article = link.article
+        articles_data.append({
+            "id": article.id,
+            "title": article.title,
+            "source": article.source,
+            "url": article.url,
+            "published_at": article.published_at.isoformat() if article.published_at else None,
+            "snippet": (article.body_text or "")[:280],
+        })
+
+    return {
+        "id": story.id,
+        "title": story.title,
+        "summary": story.summary,
+        "topic_key": story.topic_key,
+        "status": story.status,
+        "confidence_score": story.confidence_score,
+        "created_at": story.created_at.isoformat() if story.created_at else None,
+        "updated_at": story.updated_at.isoformat() if story.updated_at else None,
+        "article_count": len(articles_data),
+        "articles": articles_data,
+    }
+
+
+@app.get("/api/stories")
+async def get_stories() -> Dict[str, Any]:
+    with get_session() as session:
+        stories = (
+            session.query(Story)
+            .options(joinedload(Story.articles).joinedload(StoryArticle.article))
+            .order_by(Story.updated_at.desc())
+            .limit(50)
+            .all()
+        )
+        return {"stories": [_story_to_dict(story) for story in stories]}
+
+
+@app.get("/api/stories/{story_id}")
+async def get_story(story_id: int) -> Dict[str, Any]:
+    with get_session() as session:
+        story = (
+            session.query(Story)
+            .options(joinedload(Story.articles).joinedload(StoryArticle.article))
+            .filter(Story.id == story_id)
+            .first()
+        )
+        if not story:
+            raise HTTPException(status_code=404, detail="Story not found")
+        return {"story": _story_to_dict(story)}
 
 @app.get("/api/topics")
 async def get_topics():

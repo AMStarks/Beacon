@@ -137,15 +137,6 @@ class RateLimitedNewsCollector:
         all_articles.extend(rss_articles)
         print(f"🛰️ Collected {len(rss_articles)} articles from RSS feeds")
 
-        # Collect from curated seed URLs and GDELT
-        seed_articles = await self._collect_from_seed_urls()
-        all_articles.extend(seed_articles)
-        print(f"🌱 Collected {len(seed_articles)} articles from seed urls")
-
-        gdelt_articles = await self._collect_from_gdelt()
-        all_articles.extend(gdelt_articles)
-        print(f"🌐 Collected {len(gdelt_articles)} articles from GDELT")
-
         # Remove duplicates
         unique_articles = self._remove_duplicates(all_articles)
         print(f"✅ Total unique articles collected: {len(unique_articles)}")
@@ -381,7 +372,7 @@ class RateLimitedNewsCollector:
             published_at=article.published_at or datetime.now(),
             category="general",
             country="US",
-            language=article.language
+            language=getattr(article, "language", "en")
         )
 
     def _remove_duplicates(self, articles: List['NewsArticle']) -> List['NewsArticle']:

@@ -4,7 +4,6 @@ import logging
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from newspaper import Article as NPArticle
 from readability import Document
 import trafilatura
 
@@ -25,11 +24,6 @@ class ExtractionService:
             if len(readability_text) > len(text):
                 text = readability_text
 
-        if len(text) < self.min_length and raw.url:
-            newspaper_text = self._newspaper_extract(raw.url)
-            if len(newspaper_text) > len(text):
-                text = newspaper_text
-
         if len(text) < self.min_length and raw.raw_html:
             trafilatura_text = self._trafilatura_extract(raw.raw_html)
             if len(trafilatura_text) > len(text):
@@ -44,16 +38,6 @@ class ExtractionService:
             summary_html = doc.summary(html_partial=True)
             return BeautifulSoup(summary_html, 'html.parser').get_text(separator=' ').strip()
         except Exception:
-            return ""
-
-    def _newspaper_extract(self, url: str) -> str:
-        try:
-            article = NPArticle(url)
-            article.download()
-            article.parse()
-            return article.text
-        except Exception as exc:
-            logger.debug("newspaper failed for %s: %s", url, exc)
             return ""
 
     def _trafilatura_extract(self, html: str) -> str:

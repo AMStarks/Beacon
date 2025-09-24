@@ -21,6 +21,8 @@ class Article:
     summary: str = ""
     language: str = "en"
     category: str = "general"
+    raw_html: str = ""
+    meta: dict | None = None
 
 
 class BaseCollector:

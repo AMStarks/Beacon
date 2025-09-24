@@ -1,5 +1,5 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import asyncio
 import logging
 
@@ -65,27 +65,36 @@ class LocalLLMService:
         if hasattr(self.model.config, "cache_implementation"):
             self.model.config.cache_implementation = "static"
 
-        self.generator = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer,
-            device="cpu"
-        )
-
     async def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.3) -> str:
         if not self.is_loaded:
             await self.load_model()
 
-        outputs = self.generator(
-            prompt,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id
-        )
+        encoded = self.tokenizer(prompt, return_tensors="pt")
+        input_ids = encoded.input_ids.to(self.model.device)
+        attention_mask = encoded.attention_mask.to(self.model.device)
 
-        return outputs[0]["generated_text"]
+        loop = asyncio.get_event_loop()
+
+        def _generate():
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    use_cache=False,
+                )
+            return outputs
+
+        output_ids = await loop.run_in_executor(None, _generate)
+        generated_ids = output_ids[0]
+        completion_ids = generated_ids[input_ids.shape[-1]:]
+        completion_text = self.tokenizer.decode(completion_ids, skip_special_tokens=True)
+
+        return prompt + completion_text
     
     async def generate_summary(self, articles_text: str) -> str:
         """Generate a summary using the local LLM"""
