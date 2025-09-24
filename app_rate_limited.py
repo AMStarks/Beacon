@@ -34,6 +34,7 @@ topic_storage = TopicStorage()
 topics_db = {}
 background_task_running = False
 task_lock = asyncio.Lock()
+latest_articles_debug = []
 
 @app.on_event("startup")
 async def startup_event():
@@ -59,6 +60,10 @@ async def debug_dashboard(request: Request):
     with open("debug_dashboard.html", "r") as f:
         content = f.read()
     return HTMLResponse(content=content)
+
+@app.get("/api/debug/articles")
+async def debug_articles():
+    return {"articles": latest_articles_debug}
 
 @app.get("/api/topics")
 async def get_topics():
@@ -114,6 +119,24 @@ async def rate_limited_news_aggregation_task():
                         timeout=120.0  # 2 minute timeout for article collection
                     )
                     print(f"📰 Collected {len(articles)} articles")
+
+                    global latest_articles_debug
+                    latest_articles_debug = [
+                        {
+                            "title": getattr(a, 'title', ''),
+                            "source": getattr(a, 'source', ''),
+                            "url": getattr(a, 'url', ''),
+                            "content_length": len(getattr(a, 'content', '') or ""),
+                            "preview": (getattr(a, 'content', '') or "")[:280]
+                        }
+                        for a in articles
+                    ]
+
+                    short_articles = [info for info in latest_articles_debug if info["content_length"] < 400]
+                    if short_articles:
+                        print(f"ℹ️ {len(short_articles)} articles have <400 chars of content")
+                        for info in short_articles[:5]:
+                            print(f"   - {info['source']}: {info['title']} ({info['content_length']} chars)")
                 except asyncio.TimeoutError:
                     print("⏰ Article collection timed out, skipping this cycle")
                     await asyncio.sleep(60)
