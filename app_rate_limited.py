@@ -147,8 +147,8 @@ async def rate_limited_news_aggregation_task():
                         traceback.print_exc()
                 
                 # Wait 10 minutes between cycles to respect rate limits
-                print("⏰ Waiting 10 minutes before next cycle to respect rate limits...")
-                await asyncio.sleep(600)  # 10 minutes between cycles
+                print("⏰ Waiting 3 minutes before next cycle to respect rate limits...")
+                await asyncio.sleep(180)  # 3 minutes between cycles
                 
         except Exception as e:
             print(f"❌ Critical error in news aggregation: {e}")

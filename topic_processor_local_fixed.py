@@ -116,7 +116,8 @@ class TopicProcessor:
                 title = await enhanced_title_generator.generate_title(articles_text)
             else:
                 title = enhanced_title_generator.clean_headline(getattr(articles[0], 'title', 'News Update'))
-            summary = await enhanced_title_generator.generate_summary(articles_text)
+
+            summary = await enhanced_title_generator.generate_summary(articles_text if has_multiple_articles else getattr(articles[0], 'content', ''))
             
             # Calculate source weights and names
             source_names = list({getattr(article, 'source', 'Unknown') for article in articles})

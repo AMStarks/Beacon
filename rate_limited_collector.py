@@ -99,10 +99,9 @@ class RateLimitedNewsCollector:
     async def collect_articles(self) -> List[NewsArticle]:
         """Main method to collect articles with rate limiting"""
         print("🔍 Starting rate-limited news collection...")
-        
-        # Prevent visited URL cache from growing unbounded and missing refreshes
-        if len(self.visited_urls) > 2000:
-            self.visited_urls = set(list(self.visited_urls)[-1000:])
+
+        # Reset visited URLs each cycle so fresh headlines are allowed
+        self.visited_urls = set()
 
         all_articles = []
         
@@ -135,33 +134,38 @@ class RateLimitedNewsCollector:
         if self._can_make_api_call('newsapi'):
             try:
                 print("📡 Calling NewsAPI...")
-                response = await self.client.get(
-                    "https://newsapi.org/v2/top-headlines",
-                    params={
-                        'apiKey': self.api_keys['newsapi'],
-                        'language': 'en',
-                        'pageSize': 10,  # Reduced from 20
-                        'country': 'us'
-                    }
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    for article in data.get('articles', []):
-                        if article.get('title') and article.get('url'):
-                            content = await self._fetch_article_content_generic(article['url'])
-                            articles.append(NewsArticle(
-                                title=article['title'],
-                                url=article['url'],
-                                source=article.get('source', {}).get('name', 'Unknown'),
-                                content=content,
-                                published_at=datetime.now(),
-                                category=article.get('category', 'general')
-                            ))
-                    print(f"✅ NewsAPI: {len(articles)} articles")
-                elif response.status_code == 429:
-                    print("⚠️ NewsAPI rate limited, skipping")
-                else:
-                    print(f"❌ NewsAPI error: {response.status_code}")
+                for page in range(1, 3):
+                    response = await self.client.get(
+                        "https://newsapi.org/v2/top-headlines",
+                        params={
+                            'apiKey': self.api_keys['newsapi'],
+                            'language': 'en',
+                            'pageSize': 40,
+                            'page': page,
+                            'country': 'us'
+                        }
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        for article in data.get('articles', []):
+                            if article.get('title') and article.get('url'):
+                                content = await self._fetch_article_content_generic(article['url'])
+                                articles.append(NewsArticle(
+                                    title=article['title'],
+                                    url=article['url'],
+                                    source=article.get('source', {}).get('name', 'Unknown'),
+                                    content=content,
+                                    published_at=datetime.now(),
+                                    category=article.get('category', 'general')
+                                ))
+                        if len(data.get('articles', [])) < 40:
+                            break
+                    elif response.status_code == 429:
+                        print("⚠️ NewsAPI rate limited, skipping")
+                        break
+                    else:
+                        print(f"❌ NewsAPI error: {response.status_code}")
+                        break
             except Exception as e:
                 print(f"❌ NewsAPI error: {e}")
 
@@ -173,32 +177,38 @@ class RateLimitedNewsCollector:
         if self._can_make_api_call('newsdata'):
             try:
                 print("📡 Calling NewsData...")
-                response = await self.client.get(
-                    "https://newsdata.io/api/1/news",
-                    params={
-                        'apikey': self.api_keys['newsdata'],
-                        'language': 'en',
-                        'category': 'top'
-                    }
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    for article in data.get('results', []):
-                        if article.get('title') and article.get('link'):
-                            content = await self._fetch_article_content_generic(article['link'])
-                            articles.append(NewsArticle(
-                                title=article['title'],
-                                url=article['link'],
-                                source=article.get('source_id', 'Unknown'),
-                                content=content,
-                                published_at=datetime.now(),
-                                category=article.get('category', ['general'])[0] if article.get('category') else 'general'
-                            ))
-                    print(f"✅ NewsData: {len(articles)} articles")
-                elif response.status_code == 429:
-                    print("⚠️ NewsData rate limited, skipping")
-                else:
-                    print(f"❌ NewsData error: {response.status_code}")
+                for page in range(1, 3):
+                    response = await self.client.get(
+                        "https://newsdata.io/api/1/news",
+                        params={
+                            'apikey': self.api_keys['newsdata'],
+                            'language': 'en',
+                            'category': 'top',
+                            'page': page
+                        }
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        results = data.get('results', [])
+                        for article in results:
+                            if article.get('title') and article.get('link'):
+                                content = await self._fetch_article_content_generic(article['link'])
+                                articles.append(NewsArticle(
+                                    title=article['title'],
+                                    url=article['link'],
+                                    source=article.get('source_id', 'Unknown'),
+                                    content=content,
+                                    published_at=datetime.now(),
+                                    category=article.get('category', ['general'])[0] if article.get('category') else 'general'
+                                ))
+                        if len(results) < 40:
+                            break
+                    elif response.status_code == 429:
+                        print("⚠️ NewsData rate limited, skipping")
+                        break
+                    else:
+                        print(f"❌ NewsData error: {response.status_code}")
+                        break
             except Exception as e:
                 print(f"❌ NewsData error: {e}")
 
@@ -322,25 +332,24 @@ class RateLimitedNewsCollector:
             return None
     
     def _remove_duplicates(self, articles: List[NewsArticle]) -> List[NewsArticle]:
-        """Remove duplicate articles based on title similarity"""
+        """Remove duplicate articles based on exact URL/title matches"""
         unique_articles = []
+        seen_urls = set()
         seen_titles = set()
-        
+
         for article in articles:
-            # Simple deduplication based on title similarity
-            title_words = set(article.title.lower().split())
-            is_duplicate = False
-            
-            for seen_title in seen_titles:
-                seen_words = set(seen_title.lower().split())
-                if len(title_words.intersection(seen_words)) >= 3:  # 3+ common words = likely duplicate
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                unique_articles.append(article)
-                seen_titles.add(article.title)
-        
+            url_key = getattr(article, 'url', '').strip()
+            title_key = getattr(article, 'title', '').strip().lower()
+
+            if url_key in seen_urls or title_key in seen_titles:
+                continue
+
+            unique_articles.append(article)
+            if url_key:
+                seen_urls.add(url_key)
+            if title_key:
+                seen_titles.add(title_key)
+
         return unique_articles
 
     async def _collect_from_rss(self) -> List[NewsArticle]:
