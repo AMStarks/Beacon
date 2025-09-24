@@ -103,17 +103,23 @@ class TopicProcessor:
             
         try:
             # Prepare text for LLM - handle NewsArticle objects
-            articles_text = '\n'.join([
-                f"{getattr(article, 'title', 'No title')} - {getattr(article, 'source', 'Unknown source')}"
+            articles_text = '\n\n'.join([
+                f"Headline: {getattr(article, 'title', 'No title')}\n"
+                f"Source: {getattr(article, 'source', 'Unknown source')}\n"
+                f"Body: {getattr(article, 'content', '')[:1500]}"
                 for article in articles
             ])
+            has_multiple_articles = len(articles) > 1
             
             # Generate title and summary using enhanced title generator
-            title = await enhanced_title_generator.generate_title(articles_text)
+            if has_multiple_articles:
+                title = await enhanced_title_generator.generate_title(articles_text)
+            else:
+                title = enhanced_title_generator.clean_headline(getattr(articles[0], 'title', 'News Update'))
             summary = await enhanced_title_generator.generate_summary(articles_text)
             
             # Calculate source weights and names
-            source_names = list(set([getattr(article, 'source', 'Unknown') for article in articles]))
+            source_names = list({getattr(article, 'source', 'Unknown') for article in articles})
             source_weights = [self._get_source_weight(source) for source in source_names]
             avg_confidence = sum(source_weights) / len(source_weights) if source_weights else 0.5
             

@@ -15,6 +15,8 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET
+from readability import Document
+import trafilatura
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -128,7 +130,7 @@ class RateLimitedNewsCollector:
     async def _collect_from_apis_with_rate_limit(self) -> List[NewsArticle]:
         """Collect articles from APIs with strict rate limiting"""
         articles = []
-        
+
         # NewsAPI - only call if 60+ seconds since last call
         if self._can_make_api_call('newsapi'):
             try:
@@ -146,11 +148,12 @@ class RateLimitedNewsCollector:
                     data = response.json()
                     for article in data.get('articles', []):
                         if article.get('title') and article.get('url'):
+                            content = await self._fetch_article_content_generic(article['url'])
                             articles.append(NewsArticle(
                                 title=article['title'],
                                 url=article['url'],
                                 source=article.get('source', {}).get('name', 'Unknown'),
-                                content=article.get('description', ''),
+                                content=content,
                                 published_at=datetime.now(),
                                 category=article.get('category', 'general')
                             ))
@@ -161,11 +164,11 @@ class RateLimitedNewsCollector:
                     print(f"❌ NewsAPI error: {response.status_code}")
             except Exception as e:
                 print(f"❌ NewsAPI error: {e}")
-            
+
             self.api_call_times['newsapi'] = time.time()
         else:
             print("⏰ NewsAPI rate limited, skipping")
-        
+
         # NewsData - only call if 60+ seconds since last call
         if self._can_make_api_call('newsdata'):
             try:
@@ -182,11 +185,12 @@ class RateLimitedNewsCollector:
                     data = response.json()
                     for article in data.get('results', []):
                         if article.get('title') and article.get('link'):
+                            content = await self._fetch_article_content_generic(article['link'])
                             articles.append(NewsArticle(
                                 title=article['title'],
                                 url=article['link'],
                                 source=article.get('source_id', 'Unknown'),
-                                content=article.get('description', ''),
+                                content=content,
                                 published_at=datetime.now(),
                                 category=article.get('category', ['general'])[0] if article.get('category') else 'general'
                             ))
@@ -197,11 +201,11 @@ class RateLimitedNewsCollector:
                     print(f"❌ NewsData error: {response.status_code}")
             except Exception as e:
                 print(f"❌ NewsData error: {e}")
-            
+
             self.api_call_times['newsdata'] = time.time()
         else:
             print("⏰ NewsData rate limited, skipping")
-        
+
         return articles
     
     def _can_make_api_call(self, api_name: str) -> bool:
@@ -267,32 +271,52 @@ class RateLimitedNewsCollector:
     async def _extract_article(self, url: str, source: Dict) -> Optional[NewsArticle]:
         """Extract article content from a URL"""
         try:
-            response = await self.client.get(url)
+            response = await self.client.get(url, timeout=20.0)
             if response.status_code != 200:
                 return None
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
+
+            html = response.text
+            soup = BeautifulSoup(html, 'html.parser')
+
             # Extract title
             title_elem = soup.select_one(source['title_selector'])
-            if not title_elem:
+            if title_elem:
+                title = title_elem.get_text().strip()
+            else:
+                doc = Document(html)
+                title = doc.short_title().strip()
+            if not title:
                 return None
-            
-            title = title_elem.get_text().strip()
-            
-            # Extract content
-            content_elems = soup.select(source['content_selector'])
-            content = " ".join([elem.get_text().strip() for elem in content_elems[:4]])  # First 4 paragraphs
-            
+
+            # Extract content: prefer structured paragraphs
+            paragraphs = [elem.get_text().strip() for elem in soup.select(source['content_selector'])]
+            paragraphs = [p for p in paragraphs if len(p.split()) > 5]
+
+            content = "\n".join(paragraphs[:6])
+
+            if len(content) < 400:
+                # Fallback to readability
+                doc = Document(html)
+                summary_html = doc.summary(html_partial=True)
+                readability_text = BeautifulSoup(summary_html, 'html.parser').get_text(separator=' ').strip()
+                if len(readability_text) < 400:
+                    # Final fallback: trafilatura
+                    extracted = trafilatura.extract(html)
+                    if extracted:
+                        readability_text = extracted.strip()
+                content = (content + '\n' + readability_text).strip()
+
+            content = re.sub(r'\s+', ' ', content)
+
             return NewsArticle(
                 title=title,
                 url=url,
                 source=source['name'],
-                content=content[:500] if content else "",  # Limit content length
+                content=content[:2000] if content else "",
                 published_at=datetime.now(),
                 category="general"
             )
-            
+
         except Exception as e:
             print(f"❌ Error extracting article from {url}: {e}")
             return None
@@ -358,11 +382,14 @@ class RateLimitedNewsCollector:
                     if description_elem is not None and description_elem.text:
                         description = re.sub('<[^<]+?>', '', description_elem.text).strip()
 
+                    full_content = await self._fetch_article_content_generic(link)
+                    content = full_content or description
+
                     articles.append(NewsArticle(
                         title=title,
                         url=link,
                         source=feed['name'],
-                        content=description[:500],
+                        content=content[:2000],
                         published_at=datetime.now(),
                         category="general"
                     ))
@@ -371,3 +398,27 @@ class RateLimitedNewsCollector:
 
         self.api_call_times['rss'] = time.time()
         return articles
+
+    async def _fetch_article_content_generic(self, url: str) -> str:
+        """Fetch article body text using readability/trafilatura."""
+        try:
+            response = await self.client.get(url, timeout=20.0, headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+            if response.status_code != 200:
+                return ""
+
+            html = response.text
+            text = trafilatura.extract(html)
+            if not text:
+                doc = Document(html)
+                summary_html = doc.summary(html_partial=True)
+                text = BeautifulSoup(summary_html, 'html.parser').get_text(separator=' ')
+
+            if not text:
+                return ""
+
+            return re.sub(r'\s+', ' ', text).strip()
+        except Exception as e:
+            print(f"❌ Error fetching article body from {url}: {e}")
+            return ""

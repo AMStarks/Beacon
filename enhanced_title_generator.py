@@ -6,7 +6,7 @@ Uses improved prompts, post-processing, and context optimization for concise tit
 import re
 import asyncio
 import torch
-from typing import List, Dict, Any
+from typing import List
 from local_llm_service import local_llm
 
 class EnhancedTitleGenerator:
@@ -164,26 +164,14 @@ Headline:"""
         # Get LLM response with timeout
         if not local_llm.is_loaded:
             await asyncio.wait_for(local_llm.load_model(), timeout=10.0)
-        
-        inputs = local_llm.tokenizer.encode(prompt, return_tensors='pt')
-        
-        with torch.no_grad():
-            outputs = local_llm.model.generate(
-                inputs,
-                max_length=inputs.shape[1] + 25,  # Allow for longer titles
-                num_return_sequences=1,
-                temperature=0.7,  # Higher temperature for more creative output
-                do_sample=True,
-                pad_token_id=local_llm.tokenizer.eos_token_id
-            )
-        
-        response = local_llm.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Extract title from response
-        if 'Headline:' in response:
-            title = response.split('Headline:')[-1].strip()
-        else:
-            title = response[len(prompt):].strip()
+
+        response = await local_llm.generate_text(
+            prompt,
+            max_new_tokens=32,
+            temperature=0.25
+        )
+
+        title = response.strip()
         
         # Post-process the title
         clean_title = self._post_process_title(title)
@@ -247,26 +235,17 @@ Summary:"""
         
         if not local_llm.is_loaded:
             await asyncio.wait_for(local_llm.load_model(), timeout=10.0)
-        
-        inputs = local_llm.tokenizer.encode(prompt, return_tensors='pt')
-        
-        with torch.no_grad():
-            outputs = local_llm.model.generate(
-                inputs,
-                max_length=inputs.shape[1] + 50,
-                num_return_sequences=1,
-                temperature=0.5,
-                do_sample=True,
-                pad_token_id=local_llm.tokenizer.eos_token_id
-            )
-        
-        response = local_llm.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Extract summary
+
+        response = await local_llm.generate_text(
+            prompt,
+            max_new_tokens=120,
+            temperature=0.3
+        )
+
         if 'Summary:' in response:
             summary = response.split('Summary:')[-1].strip()
         else:
-            summary = response[len(prompt):].strip()
+            summary = response.strip()
         
         # Clean up summary
         summary = re.sub(r'\s+', ' ', summary)
@@ -283,12 +262,19 @@ Summary:"""
         keywords = self._extract_keywords(articles_text)
         
         if keywords and len(keywords) >= 2:
-            # Create a simple summary using keywords
-            key_words = keywords[:4]  # Use top 4 keywords
-            fallback = f"Coverage of {', '.join(key_words[:2])} and related developments."
+            key_words = keywords[:4]
+            fallback = f"Coverage of {', '.join(key_words[:3])} and related developments."
             return fallback[:200]
         
         return "News coverage of current events."
+
+    def clean_headline(self, headline: str) -> str:
+        """Return a cleaned, title-cased version of an original headline."""
+        headline = re.sub(r'\s+', ' ', headline or '').strip()
+        if not headline:
+            return "News Update"
+        cleaned = self._apply_title_case(headline)
+        return cleaned[:80]
 
 # Global instance
 enhanced_title_generator = EnhancedTitleGenerator()

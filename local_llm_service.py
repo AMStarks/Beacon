@@ -14,6 +14,7 @@ class LocalLLMService:
         self.model_name = PHI3_MODEL_ID
         self.generator = None
         self.is_loaded = False
+        self.logger = logging.getLogger("LocalLLMService")
         
     async def load_model(self):
         """Load the local LLM model with timeout protection"""
@@ -70,6 +71,21 @@ class LocalLLMService:
             tokenizer=self.tokenizer,
             device="cpu"
         )
+
+    async def generate_text(self, prompt: str, max_new_tokens: int = 64, temperature: float = 0.3) -> str:
+        if not self.is_loaded:
+            await self.load_model()
+
+        outputs = self.generator(
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            do_sample=True,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id
+        )
+
+        return outputs[0]["generated_text"]
     
     async def generate_summary(self, articles_text: str) -> str:
         """Generate a summary using the local LLM"""
@@ -84,16 +100,11 @@ class LocalLLMService:
                 f"{articles_text[:1200]}\n\nSummary:"
             )
 
-            outputs = self.generator(
+            generated = await self.generate_text(
                 prompt,
-                max_new_tokens=120,
-                temperature=0.6,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id
+                max_new_tokens=150,
+                temperature=0.2
             )
-
-            generated = outputs[0]["generated_text"]
 
             summary = generated.split("Summary:")[-1].strip()
 
@@ -115,16 +126,12 @@ class LocalLLMService:
                 f"Content:\n{articles_text[:800]}\n\nHeadline:"
             )
 
-            outputs = self.generator(
+            generated = await self.generate_text(
                 prompt,
-                max_new_tokens=40,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id
+                max_new_tokens=48,
+                temperature=0.25
             )
 
-            generated = outputs[0]["generated_text"]
             title = generated.split("Headline:")[-1].strip()
 
             title = title.replace('\n', ' ').strip()
