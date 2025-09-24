@@ -16,6 +16,16 @@ COLLECTOR_REGISTRY = {
     "newsplease_seed": {
         "type": "crawler",
         "factory": NewsPleaseCollector,
+        "config": {
+            "seed_urls": [
+                "https://www.reuters.com/world/us/",
+                "https://apnews.com/hub/ap-top-news",
+                "https://www.npr.org/sections/news/",
+                "https://www.politico.com/",
+                "https://www.axios.com/",
+                "https://www.ft.com/world/us",
+            ]
+        }
     },
     "newspaper": {
         "type": "extractor",
@@ -24,5 +34,6 @@ COLLECTOR_REGISTRY = {
     "gdelt": {
         "type": "dataset",
         "factory": GDELTCollector,
+        "config": {"limit": 300}
     },
 }
