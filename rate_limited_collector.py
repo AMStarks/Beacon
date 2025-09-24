@@ -18,6 +18,13 @@ import xml.etree.ElementTree as ET
 from readability import Document
 import trafilatura
 
+from news_collectors import (
+    NewspaperCollector,
+    NewsPleaseCollector,
+    GDELTCollector,
+    Article as CollectorArticle,
+)
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,6 +95,16 @@ class RateLimitedNewsCollector:
             }
         ]
 
+        # Seed URLs for direct crawling (can be expanded/configured)
+        self.seed_urls = [
+            "https://www.reuters.com/world/us/",
+            "https://apnews.com/hub/ap-top-news",
+            "https://www.npr.org/sections/news/",
+            "https://www.politico.com/",
+            "https://www.cnn.com/world",
+            "https://www.bbc.com/news/world",
+        ]
+
         # RSS feeds for additional breadth (parsed without feedparser dependency)
         self.rss_feeds = [
             {"name": "Reuters World", "url": "https://www.reuters.com/world/rss"},
@@ -119,7 +136,16 @@ class RateLimitedNewsCollector:
         rss_articles = await self._collect_from_rss()
         all_articles.extend(rss_articles)
         print(f"🛰️ Collected {len(rss_articles)} articles from RSS feeds")
-        
+
+        # Collect from curated seed URLs and GDELT
+        seed_articles = await self._collect_from_seed_urls()
+        all_articles.extend(seed_articles)
+        print(f"🌱 Collected {len(seed_articles)} articles from seed urls")
+
+        gdelt_articles = await self._collect_from_gdelt()
+        all_articles.extend(gdelt_articles)
+        print(f"🌐 Collected {len(gdelt_articles)} articles from GDELT")
+
         # Remove duplicates
         unique_articles = self._remove_duplicates(all_articles)
         print(f"✅ Total unique articles collected: {len(unique_articles)}")
@@ -331,7 +357,34 @@ class RateLimitedNewsCollector:
             print(f"❌ Error extracting article from {url}: {e}")
             return None
     
-    def _remove_duplicates(self, articles: List[NewsArticle]) -> List[NewsArticle]:
+    async def _collect_from_seed_urls(self) -> List['NewsArticle']:
+        if not self.seed_urls:
+            return []
+        collector = NewsPleaseCollector(self.seed_urls)
+        articles = await collector.collect()
+        return [self._convert_collector_article(a) for a in articles]
+
+    async def _collect_from_gdelt(self) -> List['NewsArticle']:
+        gdelt_collector = GDELTCollector(limit=150)
+        gdelt_articles = await gdelt_collector.collect()
+        urls = [article.url for article in gdelt_articles]
+        detailed_articles = await NewspaperCollector(urls).collect() if urls else []
+        combined = gdelt_articles + detailed_articles
+        return [self._convert_collector_article(article) for article in combined]
+
+    def _convert_collector_article(self, article: CollectorArticle) -> 'NewsArticle':
+        return NewsArticle(
+            title=article.title,
+            url=article.url,
+            source=article.source,
+            content=article.content,
+            published_at=article.published_at or datetime.now(),
+            category="general",
+            country="US",
+            language=article.language
+        )
+
+    def _remove_duplicates(self, articles: List['NewsArticle']) -> List['NewsArticle']:
         """Remove duplicate articles based on exact URL/title matches"""
         unique_articles = []
         seen_urls = set()
