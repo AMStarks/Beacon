@@ -1,0 +1,14 @@
+{
+  "model": "llama3.1:8b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a professional news editor. Generate concise headlines and summaries."
+    },
+    {
+      "role": "user",
+      "content": "Article: NewsNews\nContent: This is a test article about news.\n\nGenerate a professional news headline and summary. Follow these EXACT rules:\n\nLENGTH RULE (CRITICAL):\n- HEADLINE must be EXACTLY 35-80 characters\n- Count characters carefully - this is enforced strictly\n- NO titles under 35 characters or over 80 characters\n- Target 50-70 characters for optimal readability\n\nFORBIDDEN TITLES (DO NOT CREATE THESE):\n- Generic titles: \"News\", \"Breaking News\", \"Latest News\", \"NewsNews\"\n- Conversational: \"Here's\", \"Sure, there's\", \"Here we go\"\n- Too short: Under 35 characters\n- Too long: Over 80 characters\n\nHEADLINE: [EXACTLY 35-80 characters, count them, no generic/conversational language]\nSUMMARY: [2-3 sentences, factual]\n\nResponse:"
+    }
+  ],
+  "stream": false
+}

@@ -4,8 +4,10 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+    build-essential \
+    libxml2-dev \
+    libxslt1-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -16,12 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Set environment variables
-ENV GROK_API_KEY=""
-ENV LLM_TITLES=1
-ENV LLM_SUMMARIES=1
+ENV PYTHONUNBUFFERED=1
 
 # Expose port
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]

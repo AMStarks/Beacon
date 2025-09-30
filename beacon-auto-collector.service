@@ -1,0 +1,15 @@
+[Unit]
+Description=Beacon Auto Article Collector
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Beacon
+Environment=PATH=/root/Beacon/.venv/bin
+ExecStart=/root/Beacon/.venv/bin/python /root/Beacon/auto_collector.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
