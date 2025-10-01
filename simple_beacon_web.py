@@ -246,10 +246,46 @@ HTML_TEMPLATE = """
             const container = document.getElementById('articles-container');
             container.innerHTML = '';
             
-            articles.forEach(article => {
-                const card = createArticleCard(article);
+            articles.forEach(item => {
+                const card = item.is_cluster ? createClusterCard(item) : createArticleCard(item);
                 container.appendChild(card);
             });
+        }
+        
+        function createClusterCard(cluster) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.background = 'linear-gradient(135deg, #e0f2fe 0%, #dbeafe 100%)';
+            card.style.border = '2px solid #3b82f6';
+            
+            // Create sources list HTML
+            const sourcesHTML = cluster.sources.map(s => `
+                <div style="margin: 5px 0; padding: 8px; background: white; border-radius: 6px;">
+                    <span style="color: #3b82f6; font-weight: 600;">Article ${s.article_id}</span> - 
+                    <span style="color: #64748b;">${s.source || 'Unknown'}</span> - 
+                    <a href="${s.url}" target="_blank" style="color: #3b82f6;">View</a>
+                </div>
+            `).join('');
+            
+            card.innerHTML = `
+                <div style="background: #3b82f6; color: white; padding: 8px 16px; border-radius: 8px; display: inline-block; margin-bottom: 15px; font-weight: 600;">
+                    📊 CLUSTER #${cluster.cluster_id}
+                </div>
+                <h2>${cluster.cluster_title || 'Cluster'}</h2>
+                <div class="article-meta">
+                    <span>📰 <strong>${cluster.sources.length} Related Articles</strong></span>
+                    <span>🔄 <strong>Updated:</strong> ${formatDate(new Date(cluster.updated_at))}</span>
+                </div>
+                <div class="article-excerpt">
+                    <p>${cluster.cluster_summary || 'No summary available'}</p>
+                </div>
+                <div class="article-info">
+                    <p><strong>Cluster ID:</strong> ${cluster.cluster_id}</p>
+                    <p><strong>Sources:</strong></p>
+                    ${sourcesHTML}
+                </div>
+            `;
+            return card;
         }
         
         function createArticleCard(article) {
@@ -469,11 +505,63 @@ def index():
 
 @app.route('/api/articles')
 def get_articles():
-    """Get all articles from database"""
+    """Get all articles and clusters from database"""
     try:
-        articles = db.get_all_articles()
-        return jsonify({"success": True, "articles": articles})
+        import sqlite3
+        
+        # Get all clusters with their data
+        conn = sqlite3.connect('beacon_articles.db')
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT cluster_id, cluster_title, cluster_summary, article_ids, 
+                   created_at, updated_at
+            FROM clusters 
+            ORDER BY updated_at DESC
+        ''')
+        clusters_rows = cursor.fetchall()
+        
+        clusters = []
+        clustered_article_ids = set()
+        
+        for row in clusters_rows:
+            cluster_data = dict(row)
+            article_ids = json.loads(cluster_data['article_ids'])
+            clustered_article_ids.update(article_ids)
+            
+            # Get article URLs/sources for this cluster
+            cursor.execute(f'''
+                SELECT article_id, url, source 
+                FROM articles 
+                WHERE article_id IN ({','.join('?' * len(article_ids))})
+            ''', article_ids)
+            
+            sources = [{'article_id': r[0], 'url': r[1], 'source': r[2]} 
+                      for r in cursor.fetchall()]
+            
+            cluster_data['sources'] = sources
+            cluster_data['article_ids'] = article_ids
+            cluster_data['is_cluster'] = True
+            clusters.append(cluster_data)
+        
+        # Get standalone articles (not in any cluster)
+        cursor.execute('''
+            SELECT * FROM articles 
+            WHERE cluster_id IS NULL 
+            ORDER BY created_at DESC
+        ''')
+        standalone_rows = cursor.fetchall()
+        standalone_articles = [dict(row) for row in standalone_rows]
+        
+        conn.close()
+        
+        # Combine clusters and standalone articles
+        all_items = clusters + standalone_articles
+        
+        return jsonify({"success": True, "articles": all_items})
     except Exception as e:
+        logger.error(f"Error in get_articles: {e}")
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/process-article', methods=['POST'])
