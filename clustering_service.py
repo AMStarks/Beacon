@@ -10,12 +10,16 @@ import re
 from typing import Dict, List, Tuple, Optional
 import sqlite3
 from datetime import datetime, timedelta
+from similarity_index import SimilarityIndex
+from database_pool import get_db_pool
 
 class ClusteringService:
     def __init__(self, db_path="beacon_articles.db"):
         self.db_path = db_path
         self.ollama_url = "http://localhost:11434/api/generate"
         self.model = "gemma:2b"
+        self.similarity_index = SimilarityIndex(db_path)
+        self.db_pool = get_db_pool(db_path)
         
         # Weighted scoring system
         self.weights = {
@@ -168,21 +172,20 @@ Respond with ONLY a number (0-100), no explanation."""
         return 0.0
     
     def find_potential_clusters(self, new_article_id: int, new_identifiers: Dict) -> List[Tuple[int, float]]:
-        """Find existing articles that might cluster with the new article"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Get all existing articles with identifiers
-        cursor.execute("""
+        """Find existing articles that might cluster with the new article (smart clustering - recent articles only)"""
+        # Get only recent articles (last 30 days) with identifiers for smart clustering
+        thirty_days_ago = datetime.now() - timedelta(days=30)
+        rows = self.db_pool.execute_query("""
             SELECT article_id, identifier_1, identifier_2, identifier_3, 
                    identifier_4, identifier_5, identifier_6
             FROM articles 
-            WHERE article_id != ? AND cluster_id IS NULL
-        """, (new_article_id,))
+            WHERE article_id != ? AND cluster_id IS NULL 
+            AND created_at >= ?
+        """, (new_article_id, thirty_days_ago))
         
         potential_matches = []
         
-        for row in cursor.fetchall():
+        for row in rows:
             article_id = row[0]
             existing_identifiers = {
                 'topic_primary': row[1] or '',
@@ -202,7 +205,6 @@ Respond with ONLY a number (0-100), no explanation."""
             if score >= self.min_score_threshold and has_high_weight:
                 potential_matches.append((article_id, score))
         
-        conn.close()
         return sorted(potential_matches, key=lambda x: x[1], reverse=True)
     
     def create_cluster(self, article_ids: List[int], cluster_title: str, cluster_summary: str) -> int:

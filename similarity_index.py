@@ -41,7 +41,7 @@ class SimilarityIndex:
         return identifier.lower().strip()
     
     def _calculate_similarity(self, text1: str, text2: str) -> float:
-        """Calculate similarity between two identifiers"""
+        """Calculate similarity between two identifiers using the same logic as original"""
         if not text1 or not text2:
             return 0.0
         
@@ -65,14 +65,23 @@ class SimilarityIndex:
         
         jaccard = intersection / union
         
-        # Boost for key words
-        key_words = ['church', 'shooting', 'michigan', 'gunman', 'attack', 'fire', 'mormon', 'trump', 'peace', 'gaza']
+        # Boost for key words that indicate same topic
+        key_words = ['church', 'shooting', 'michigan', 'gunman', 'attack', 'fire', 'mormon']
         key_overlap = sum(1 for word in key_words if word in words1 and word in words2)
         
+        # If we have key word overlap, boost the score
         if key_overlap > 0:
             jaccard = max(jaccard, 0.3 + (key_overlap * 0.2))
         
-        return min(jaccard, 1.0)
+        # Boost for high overlap
+        if jaccard >= 0.9:
+            return 1.0
+        elif jaccard >= 0.7:
+            return 0.9
+        elif jaccard >= 0.3:
+            return 0.8
+        else:
+            return jaccard
     
     def get_similarity(self, identifier1: str, identifier2: str) -> float:
         """Get similarity score from index or calculate and store"""

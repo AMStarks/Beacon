@@ -9,6 +9,7 @@ import sys
 import os
 import time
 from datetime import datetime
+import requests
 
 class AsyncProcessor:
     def __init__(self):
@@ -43,15 +44,63 @@ class AsyncProcessor:
             print("Generating identifiers...")
             identifier_result = subprocess.run([
                 "python3", f"{self.base_path}/sync_identifier_generator.py", url
-            ], capture_output=True, text=True, timeout=120)
+            ], capture_output=True, text=True, timeout=180)
             
             if identifier_result.returncode != 0:
                 print(f"Identifier generation failed: {identifier_result.stderr}")
                 return False
             
-            # Step 4: Update database with results
+            # Step 4: Fetch article content
+            print("Fetching article content...")
+            import json
+            import re
+            from bs4 import BeautifulSoup
+            
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe']):
+                    element.decompose()
+                
+                selectors = ['article', '[role="main"]', '.article-content', '.post-content', '.entry-content', 'main']
+                article_content = ""
+                for selector in selectors:
+                    elem = soup.select_one(selector)
+                    if elem:
+                        article_content = elem.get_text().strip()
+                        break
+                
+                if not article_content:
+                    body = soup.find('body')
+                    if body:
+                        article_content = body.get_text().strip()
+                
+                article_content = re.sub(r'\s+', ' ', article_content)
+                article_content = article_content[:5000]
+            else:
+                article_content = ""
+            
+            # Step 5: Parse results
+            print("Parsing results...")
+            
+            # Parse title
+            title_match = re.search(r"'neutral_title':\s*'([^']+)'", title_result.stdout)
+            title = title_match.group(1) if title_match else "Processing..."
+            
+            # Parse excerpt (handle escaped quotes)
+            excerpt_match = re.search(r"'neutral_excerpt':\s*'(.+?)',\s*'word_count'", excerpt_result.stdout, re.DOTALL)
+            if not excerpt_match:
+                excerpt_match = re.search(r"'neutral_excerpt':\s*\"(.+?)\",\s*'word_count'", excerpt_result.stdout, re.DOTALL)
+            excerpt = excerpt_match.group(1) if excerpt_match else ""
+            
+            # Parse identifiers (already handled by parse_identifier_output)
+            identifiers = self.parse_identifier_output(identifier_result.stdout)
+            
+            # Step 6: Update database with results
             print("Updating database...")
-            self.update_database(article_id, title_result.stdout, excerpt_result.stdout, identifier_result.stdout)
+            self.update_database(article_id, title, excerpt, identifiers, article_content)
             
             # Step 5: Process clustering
             print("Processing clustering...")
@@ -67,41 +116,47 @@ class AsyncProcessor:
             print(f"Error processing article {article_id}: {e}")
             return False
     
-    def update_database(self, article_id: int, title: str, excerpt: str, identifier_output: str):
+    def update_database(self, article_id: int, title: str, excerpt: str, identifiers: dict, content: str):
         """Update database with generated content"""
         try:
-            # Parse identifier output
-            identifiers = self.parse_identifier_output(identifier_output)
+            import json
+            # Escape all values for safe embedding
+            title_safe = title.replace("'", "''")
+            excerpt_safe = excerpt.replace("'", "''")
+            content_safe = content.replace("'", "''")
+            identifiers_json = json.dumps(identifiers).replace("'", "''")
             
             # Update database
             update_script = f"""
 import sqlite3
 import json
 
-conn = sqlite3.connect('beacon.db')
+# Recreate identifiers from parent
+identifiers = json.loads('{identifiers_json}')
+
+conn = sqlite3.connect('beacon_articles.db')
 cursor = conn.cursor()
 
-# Clean title and excerpt
-title = '''{title}'''.strip()
-excerpt = '''{excerpt}'''.strip()
+# Values already escaped
+title = '''{title_safe}'''
+excerpt = '''{excerpt_safe}'''
+content = '''{content_safe}'''
 
 # Update article
 cursor.execute('''
     UPDATE articles 
-    SET title = ?, excerpt = ?, 
+    SET title = ?, excerpt = ?, content = ?,
         identifier_1 = ?, identifier_2 = ?, identifier_3 = ?,
-        identifier_4 = ?, identifier_5 = ?, identifier_6 = ?,
-        updated_at = ?
+        identifier_4 = ?, identifier_5 = ?, identifier_6 = ?
     WHERE article_id = ?
 ''', (
-    title, excerpt,
+    title, excerpt, content,
     identifiers.get('topic_primary', ''),
     identifiers.get('topic_secondary', ''),
     identifiers.get('entity_primary', ''),
     identifiers.get('entity_secondary', ''),
     identifiers.get('location_primary', ''),
     identifiers.get('event_or_policy', ''),
-    '{datetime.now()}',
     {article_id}
 ))
 
@@ -128,11 +183,17 @@ print("Database updated successfully")
             # Look for JSON in the output
             import json
             import re
+            import ast
             
-            json_match = re.search(r'\{.*\}', output, re.DOTALL)
+            # Try to find the dict after "Generated identifiers:"
+            json_match = re.search(r"Generated identifiers:\s*(\{.+?\})\s*\n", output, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group(0))
-        except:
+                dict_str = json_match.group(1)
+                # Use ast.literal_eval to safely parse Python dict with apostrophes
+                return ast.literal_eval(dict_str)
+        except Exception as e:
+            print(f"Error parsing identifiers: {e}")
+            print(f"Output was: {output[:500]}")
             pass
         
         # Fallback: return empty structure
@@ -148,59 +209,50 @@ print("Database updated successfully")
     def process_clustering(self, article_id: int, url: str):
         """Process clustering for the article"""
         try:
-            # Get article content for clustering
-            import requests
-            response = requests.get(url, timeout=30)
-            content = response.text if response.status_code == 200 else ""
-            
-            # Run clustering
-            clustering_script = f"""
-import sys
-sys.path.append('{self.base_path}')
-from clustering_service import ClusteringService
+            # Get short content for clustering from DB (use excerpt)
+            import sqlite3
+            conn_local = sqlite3.connect('beacon_articles.db')
+            cur = conn_local.cursor()
+            cur.execute('SELECT excerpt FROM articles WHERE article_id = ?', (article_id,))
+            row = cur.fetchone()
+            conn_local.close()
+            content = (row[0] or '') if row else ''
+            content = content[:1500]
 
-# Get identifiers from database
-import sqlite3
-conn = sqlite3.connect('beacon.db')
-cursor = conn.cursor()
-cursor.execute('''
-    SELECT identifier_1, identifier_2, identifier_3, 
-           identifier_4, identifier_5, identifier_6
-    FROM articles WHERE article_id = ?
-''', ({article_id},))
-result = cursor.fetchone()
-conn.close()
-
-if result:
-    identifiers = {{
-        'topic_primary': result[0] or '',
-        'topic_secondary': result[1] or '',
-        'entity_primary': result[2] or '',
-        'entity_secondary': result[3] or '',
-        'location_primary': result[4] or '',
-        'event_or_policy': result[5] or ''
-    }}
-    
-    # Process clustering
-    service = ClusteringService()
-    cluster_id = service.process_clustering({article_id}, identifiers, '''{content}''')
-    
-    if cluster_id:
-        print(f"Article clustered with ID: {{cluster_id}}")
-    else:
-        print("No clustering performed")
-else:
-    print("No identifiers found for clustering")
-"""
+            # Run clustering - call directly instead of via subprocess to avoid f-string issues
+            import sqlite3
+            conn_cluster = sqlite3.connect('beacon_articles.db')
+            cursor_cluster = conn_cluster.cursor()
+            cursor_cluster.execute('''
+                SELECT identifier_1, identifier_2, identifier_3, 
+                       identifier_4, identifier_5, identifier_6
+                FROM articles WHERE article_id = ?
+            ''', (article_id,))
+            result = cursor_cluster.fetchone()
+            conn_cluster.close()
             
-            result = subprocess.run([
-                "python3", "-c", clustering_script
-            ], capture_output=True, text=True, timeout=180)
-            
-            if result.returncode == 0:
-                print("Clustering processed successfully")
+            if result:
+                identifiers_dict = {
+                    'topic_primary': result[0] or '',
+                    'topic_secondary': result[1] or '',
+                    'entity_primary': result[2] or '',
+                    'entity_secondary': result[3] or '',
+                    'location_primary': result[4] or '',
+                    'event_or_policy': result[5] or ''
+                }
+                
+                # Import and call clustering service directly
+                sys.path.append(self.base_path)
+                from clustering_service import ClusteringService
+                service = ClusteringService()
+                cluster_id = service.process_clustering(article_id, identifiers_dict, content)
+                
+                if cluster_id:
+                    print(f'Article clustered with ID: {cluster_id}')
+                else:
+                    print('No clustering performed')
             else:
-                print(f"Clustering failed: {result.stderr}")
+                print('No identifiers found for clustering')
                 
         except Exception as e:
             print(f"Error processing clustering: {e}")
