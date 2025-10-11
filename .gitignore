@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+build/
+dist/
+.env
+.env.*
+.DS_Store
+beacon.db
+*.log
+.venv/
+.pytest_cache/
+data/
+_backups/

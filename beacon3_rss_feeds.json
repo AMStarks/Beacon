@@ -1,0 +1,342 @@
+{
+  "feeds": [
+    {
+      "url": "http://feeds.bbci.co.uk/news/rss.xml",
+      "name": "BBC News",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "http://feeds.bbci.co.uk/news/world/rss.xml",
+      "name": "BBC World",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "http://feeds.reuters.com/Reuters/worldNews",
+      "name": "Reuters World",
+      "category": "wire",
+      "priority": "high"
+    },
+    {
+      "url": "http://feeds.reuters.com/reuters/topNews",
+      "name": "Reuters Top News",
+      "category": "wire",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.theguardian.com/world/rss",
+      "name": "The Guardian World",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.theguardian.com/uk/rss",
+      "name": "The Guardian UK",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+      "name": "New York Times",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+      "name": "New York Times World",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "http://rss.cnn.com/rss/cnn_topstories.rss",
+      "name": "CNN Top Stories",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "http://rss.cnn.com/rss/cnn_world.rss",
+      "name": "CNN World",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://feeds.npr.org/1001/rss.xml",
+      "name": "NPR News",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.aljazeera.com/xml/rss/all.xml",
+      "name": "Al Jazeera",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "https://rss.dw.com/rdf/rss-en-all",
+      "name": "Deutsche Welle",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "http://feeds.abcnews.com/abcnews/topstories",
+      "name": "ABC News",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "http://feeds.nbcnews.com/nbcnews/public/news",
+      "name": "NBC News",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "http://feeds.washingtonpost.com/rss/national",
+      "name": "Washington Post National",
+      "category": "general",
+      "priority": "high"
+    },
+    {
+      "url": "http://feeds.washingtonpost.com/rss/world",
+      "name": "Washington Post World",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "http://rssfeeds.usatoday.com/usatoday-NewsTopStories",
+      "name": "USA Today",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "http://feeds.foxnews.com/foxnews/latest",
+      "name": "Fox News",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.politico.com/rss/politics08.xml",
+      "name": "Politico",
+      "category": "politics",
+      "priority": "medium"
+    },
+    {
+      "url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
+      "name": "Wall Street Journal World",
+      "category": "business",
+      "priority": "high"
+    },
+    {
+      "url": "https://feeds.bloomberg.com/markets/news.rss",
+      "name": "Bloomberg Markets",
+      "category": "business",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+      "name": "CNBC Top News",
+      "category": "business",
+      "priority": "medium"
+    },
+    {
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+      "name": "NYT Technology",
+      "category": "technology",
+      "priority": "medium"
+    },
+    {
+      "url": "https://techcrunch.com/feed/",
+      "name": "TechCrunch",
+      "category": "technology",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.wired.com/feed/rss",
+      "name": "Wired",
+      "category": "technology",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.theverge.com/rss/index.xml",
+      "name": "The Verge",
+      "category": "technology",
+      "priority": "high"
+    },
+    {
+      "url": "http://feeds.arstechnica.com/arstechnica/index",
+      "name": "Ars Technica",
+      "category": "technology",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.engadget.com/rss.xml",
+      "name": "Engadget",
+      "category": "technology",
+      "priority": "medium"
+    },
+    {
+      "url": "http://www.zdnet.com/news/rss.xml",
+      "name": "ZDNet",
+      "category": "technology",
+      "priority": "low"
+    },
+    {
+      "url": "https://rss.slashdot.org/Slashdot/slashdot",
+      "name": "Slashdot",
+      "category": "technology",
+      "priority": "low"
+    },
+    {
+      "url": "https://www.latimes.com/rss2.0.xml",
+      "name": "LA Times",
+      "category": "regional",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.chicagotribune.com/arcio/rss/",
+      "name": "Chicago Tribune",
+      "category": "regional",
+      "priority": "low"
+    },
+    {
+      "url": "https://www.sfchronicle.com/rss/",
+      "name": "SF Chronicle",
+      "category": "regional",
+      "priority": "low"
+    },
+    {
+      "url": "http://www.espn.com/espn/rss/news",
+      "name": "ESPN",
+      "category": "sports",
+      "priority": "low"
+    },
+    {
+      "url": "https://www.si.com/rss/si_topstories.rss",
+      "name": "Sports Illustrated",
+      "category": "sports",
+      "priority": "low"
+    },
+    {
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",
+      "name": "NYT Science",
+      "category": "science",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.scientificamerican.com/feed/",
+      "name": "Scientific American",
+      "category": "science",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.nature.com/nature.rss",
+      "name": "Nature News",
+      "category": "science",
+      "priority": "medium"
+    },
+    {
+      "url": "https://phys.org/rss-feed/",
+      "name": "Phys.org",
+      "category": "science",
+      "priority": "low"
+    },
+    {
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/Climate.xml",
+      "name": "NYT Climate",
+      "category": "environment",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.theguardian.com/environment/rss",
+      "name": "Guardian Environment",
+      "category": "environment",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.france24.com/en/rss",
+      "name": "France 24",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+      "name": "Times of India",
+      "category": "general",
+      "priority": "low"
+    },
+    {
+      "url": "https://www.smh.com.au/rss/feed.xml",
+      "name": "Sydney Morning Herald",
+      "category": "general",
+      "priority": "low"
+    },
+    {
+      "url": "https://www.cbc.ca/cmlink/rss-topstories",
+      "name": "CBC News",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.independent.co.uk/rss",
+      "name": "The Independent",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.telegraph.co.uk/rss.xml",
+      "name": "The Telegraph",
+      "category": "general",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.abc.net.au/news/feed/51120/rss.xml",
+      "name": "ABC News (AU) Top Stories",
+      "category": "australia",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.theguardian.com/australia-news/rss",
+      "name": "Guardian Australia",
+      "category": "australia",
+      "priority": "high"
+    },
+    {
+      "url": "https://www.theage.com.au/rss/feed.xml",
+      "name": "The Age",
+      "category": "australia",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.9news.com.au/rss",
+      "name": "9News Australia",
+      "category": "australia",
+      "priority": "medium"
+    },
+    {
+      "url": "https://7news.com.au/rss",
+      "name": "7News Australia",
+      "category": "australia",
+      "priority": "medium"
+    },
+    {
+      "url": "https://www.afr.com/rss",
+      "name": "Australian Financial Review",
+      "category": "australia",
+      "priority": "medium"
+    },
+    {
+      "url": "https://theconversation.com/au/articles.atom",
+      "name": "The Conversation (AU)",
+      "category": "australia",
+      "priority": "medium"
+    }
+  ],
+  "settings": {
+    "max_items_per_feed": 10,
+    "fetch_interval_minutes": 15,
+    "high_priority_interval_minutes": 10,
+    "dedupe_lookback_hours": 48,
+    "max_total_enqueues_per_run": 50
+  }
+}
+

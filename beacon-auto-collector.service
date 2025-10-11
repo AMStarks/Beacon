@@ -1,0 +1,15 @@
+[Unit]
+Description=Beacon Auto Article Collector
+After=network.target
+
+[Service]
+Type=simple
+User=starkers
+WorkingDirectory=/Users/starkers/Beacon
+Environment=PATH=/Users/starkers/Beacon/.venv/bin
+ExecStart=/Users/starkers/Beacon/.venv/bin/python /Users/starkers/Beacon/improved_sequential_collector.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

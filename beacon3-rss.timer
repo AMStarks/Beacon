@@ -1,0 +1,17 @@
+[Unit]
+Description=Beacon 3 RSS Feed Fetcher Timer
+Requires=beacon3-rss.service
+
+[Timer]
+# Run 2 minutes after boot
+OnBootSec=2min
+# Run every 15 minutes after the last activation
+OnUnitActiveSec=15min
+# Also run at regular calendar intervals
+OnCalendar=*:0/15
+# Run at consistent times (helps with logging)
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+

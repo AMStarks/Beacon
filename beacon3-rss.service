@@ -1,0 +1,19 @@
+[Unit]
+Description=Beacon 3 RSS Feed Fetcher
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/beacon3
+ExecStart=/usr/bin/python3 /root/beacon3/beacon3_rss_fetcher_once.py
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+TimeoutStartSec=300
+MemoryLimit=512M
+
+[Install]
+WantedBy=multi-user.target
+

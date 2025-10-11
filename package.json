@@ -1,0 +1,17 @@
+{
+  "name": "beacon-news-aggregation",
+  "version": "1.0.0",
+  "description": "AI-powered news aggregation with neutral fact synthesis",
+  "main": "app.py",
+  "scripts": {
+    "start": "python app.py"
+  },
+  "dependencies": {
+    "fastapi": "^0.104.1",
+    "uvicorn": "^0.24.0",
+    "httpx": "^0.25.2",
+    "beautifulsoup4": "^4.12.2",
+    "feedparser": "^6.0.10",
+    "jinja2": "^3.1.2"
+  }
+}

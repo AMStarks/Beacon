@@ -1,0 +1,8 @@
+# Beacon 2 Requirements - Clean, minimal dependencies
+Flask==3.0.0
+aiohttp==3.9.0
+beautifulsoup4==4.12.0
+requests==2.31.0
+
+# Optional: For JavaScript-heavy site support
+# playwright==1.40.0  # Uncomment to enable JavaScript rendering
